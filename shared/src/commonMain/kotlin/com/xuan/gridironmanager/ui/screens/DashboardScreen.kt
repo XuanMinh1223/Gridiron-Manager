@@ -12,18 +12,18 @@ import com.xuan.gridironmanager.domain.model.Team
 @Composable
 fun DashboardScreen(
     myTeam: Team?,
-    onStartGame: () -> Unit
+    onStartGame: () -> Unit,
 ) {
     Scaffold(
         topBar = {
             LargeTopAppBar(title = { Text("Gridiron Manager") })
-        }
+        },
     ) { padding ->
         Column(modifier = Modifier.padding(padding).padding(16.dp)) {
             if (myTeam != null) {
                 Text(text = "Managing: ${myTeam.fullName}", style = MaterialTheme.typography.headlineMedium)
                 Spacer(modifier = Modifier.height(16.dp))
-                
+
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text("Team Status", style = MaterialTheme.typography.titleLarge)
@@ -32,10 +32,10 @@ fun DashboardScreen(
                 }
 
                 Spacer(modifier = Modifier.height(24.dp))
-                
+
                 Button(
                     onClick = onStartGame,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text("Enter Live Game")
                 }
@@ -48,7 +48,7 @@ fun DashboardScreen(
                         ListItem(
                             headlineContent = { Text(player.fullName) },
                             supportingContent = { Text("${player.position.abbreviation} | Age: ${player.age}") },
-                            trailingContent = { Text("OVR: ${player.overallRating}") }
+                            trailingContent = { Text("OVR: ${player.overallRating}") },
                         )
                     }
                 }
@@ -58,4 +58,3 @@ fun DashboardScreen(
         }
     }
 }
-

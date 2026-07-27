@@ -8,7 +8,8 @@ import com.xuan.gridironmanager.ui.screens.DashboardScreen
 import com.xuan.gridironmanager.ui.screens.LiveGameScreen
 
 enum class Screen {
-    DASHBOARD, LIVE_GAME
+    DASHBOARD,
+    LIVE_GAME,
 }
 
 @Composable
@@ -22,15 +23,16 @@ fun App() {
             Screen.DASHBOARD -> {
                 DashboardScreen(
                     myTeam = gameState?.homeTeam,
-                    onStartGame = { currentScreen = Screen.LIVE_GAME }
+                    onStartGame = { currentScreen = Screen.LIVE_GAME },
                 )
             }
+
             Screen.LIVE_GAME -> {
                 LiveGameScreen(
                     gameState = gameState,
                     onSimPlay = { viewModel.simulatePlay(it) },
                     onQuickSim = { viewModel.quickSimDrive() },
-                    onBack = { currentScreen = Screen.DASHBOARD }
+                    onBack = { currentScreen = Screen.DASHBOARD },
                 )
             }
         }
