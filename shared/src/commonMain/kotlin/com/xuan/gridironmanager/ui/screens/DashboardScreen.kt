@@ -7,11 +7,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.xuan.gridironmanager.domain.model.Player
 import com.xuan.gridironmanager.domain.model.Team
 
 @Composable
 fun DashboardScreen(
     myTeam: Team?,
+    roster: List<Player>,
     onStartGame: () -> Unit,
 ) {
     Scaffold(
@@ -27,7 +29,7 @@ fun DashboardScreen(
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text("Team Status", style = MaterialTheme.typography.titleLarge)
-                        Text("Salary Cap: $${myTeam.salaryCapUsed / 1_000_000}M / $${myTeam.salaryCapTotal / 1_000_000}M")
+                        Text("Colors: ${myTeam.primaryColorHex} / ${myTeam.secondaryColorHex}")
                     }
                 }
 
@@ -44,10 +46,10 @@ fun DashboardScreen(
 
                 Text("Roster", style = MaterialTheme.typography.titleMedium)
                 LazyColumn(modifier = Modifier.weight(1f)) {
-                    items(myTeam.roster) { player ->
+                    items(roster) { player ->
                         ListItem(
                             headlineContent = { Text(player.fullName) },
-                            supportingContent = { Text("${player.position.abbreviation} | Age: ${player.age}") },
+                            supportingContent = { Text("${player.position} | Age: ${player.age}") },
                             trailingContent = { Text("OVR: ${player.overallRating}") },
                         )
                     }

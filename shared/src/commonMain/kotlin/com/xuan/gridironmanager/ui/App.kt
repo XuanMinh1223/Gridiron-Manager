@@ -23,7 +23,8 @@ fun App() {
             Screen.DASHBOARD -> {
                 DashboardScreen(
                     myTeam = gameState?.homeTeam,
-                    onStartGame = { currentScreen = Screen.LIVE_GAME },
+                    roster = gameState?.homeRoster ?: emptyList(),
+                    onStartGame = { currentScreen = Screen.LIVE_GAME }
                 )
             }
 

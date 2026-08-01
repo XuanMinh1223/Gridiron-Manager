@@ -17,47 +17,46 @@ object MatchEngine {
     }
 
     private fun resolveRun(state: GameState): PlayResult {
-        // Simple run logic: RB strength/speed vs Defense strength/tackle
-        val offense = getPossessingTeam(state)
-        val defense = getDefendingTeam(state)
+        val offenseRoster = getPossessingRoster(state)
+        val defenseRoster = getDefendingRoster(state)
         
-        val rb = offense.roster.find { it.position == Position.RB } ?: offense.roster.first()
-        val mlb = defense.roster.find { it.position == Position.LB } ?: defense.roster.first()
+        val rb = offenseRoster.find { it.position == "RB" } ?: offenseRoster.first()
+        val lb = defenseRoster.find { it.position == "LB" } ?: defenseRoster.first()
 
-        val check = (rb.attributes.physical.strength + rb.attributes.physical.speed) - 
-                    (mlb.attributes.physical.strength + mlb.attributes.technical.tackle)
+        val check = (rb.attributes.speed + rb.attributes.strength) - 
+                    (lb.attributes.strength + lb.attributes.tackle)
         
         val baseYardage = Random.nextInt(-2, 8)
-        val yardage = baseYardage + (check / 4)
+        val yardage = baseYardage + (check / 10)
         
         return PlayResult("Run by ${rb.lastName} for $yardage yards", yardage, PlayType.RUN)
     }
 
     private fun resolvePass(state: GameState): PlayResult {
-        val offense = getPossessingTeam(state)
-        val defense = getDefendingTeam(state)
+        val offenseRoster = getPossessingRoster(state)
+        val defenseRoster = getDefendingRoster(state)
 
-        val qb = offense.roster.find { it.position == Position.QB } ?: offense.roster.first()
-        val wr = offense.roster.find { it.position == Position.WR } ?: offense.roster.first()
-        val edge = defense.roster.find { it.position == Position.EDGE } ?: defense.roster.first()
-        val cb = defense.roster.find { it.position == Position.CB } ?: defense.roster.first()
+        val qb = offenseRoster.find { it.position == "QB" } ?: offenseRoster.first()
+        val wr = offenseRoster.find { it.position == "WR" } ?: offenseRoster.first()
+        val dl = defenseRoster.find { it.position == "DL" } ?: defenseRoster.first()
+        val cb = defenseRoster.find { it.position == "CB" } ?: defenseRoster.first()
 
         // Pass Rush Check
-        val passRushSuccess = (edge.attributes.technical.passRush + edge.attributes.physical.speed) > 
-                              (qb.attributes.mental.composure + Random.nextInt(0, 10))
+        val passRushSuccess = (dl.attributes.speed + dl.attributes.strength) > 
+                              (qb.attributes.awareness + Random.nextInt(0, 20))
         
         if (passRushSuccess && Random.nextFloat() < 0.2f) {
-            return PlayResult("Sacked by ${edge.lastName}", -7, PlayType.PASS)
+            return PlayResult("Sacked by ${dl.lastName}", -7, PlayType.PASS)
         }
 
         // Coverage Check
-        val coverageMargin = (wr.attributes.technical.routeRunning + wr.attributes.physical.speed) - 
-                             (cb.attributes.technical.manCoverage + cb.attributes.physical.speed)
+        val coverageMargin = (wr.attributes.routeRunning + wr.attributes.speed) - 
+                             (cb.attributes.speed + cb.attributes.awareness)
         
-        val isComplete = Random.nextInt(0, 20) + coverageMargin > 10
+        val isComplete = Random.nextInt(0, 50) + coverageMargin > 30
 
         return if (isComplete) {
-            val yardage = Random.nextInt(5, 25) + (coverageMargin / 2)
+            val yardage = Random.nextInt(5, 25) + (coverageMargin / 5)
             PlayResult("Complete pass to ${wr.lastName} for $yardage yards", yardage, PlayType.PASS)
         } else {
             PlayResult("Incomplete pass intended for ${wr.lastName}", 0, PlayType.PASS)
@@ -115,6 +114,6 @@ object MatchEngine {
         )
     }
 
-    private fun getPossessingTeam(state: GameState) = if (state.possession == TeamId.HOME) state.homeTeam else state.awayTeam
-    private fun getDefendingTeam(state: GameState) = if (state.possession == TeamId.HOME) state.awayTeam else state.homeTeam
+    private fun getPossessingRoster(state: GameState) = if (state.possession == TeamId.HOME) state.homeRoster else state.awayRoster
+    private fun getDefendingRoster(state: GameState) = if (state.possession == TeamId.HOME) state.awayRoster else state.homeRoster
 }

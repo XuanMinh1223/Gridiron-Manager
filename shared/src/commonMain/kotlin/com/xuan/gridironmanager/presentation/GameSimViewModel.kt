@@ -18,9 +18,13 @@ class GameSimViewModel : ViewModel() {
     init {
         val teams = LeagueGenerator.generateLeague()
         if (teams.size >= 2) {
+            val homeTeam = teams[0]
+            val awayTeam = teams[1]
             _gameState.value = GameState(
-                homeTeam = teams[0],
-                awayTeam = teams[1],
+                homeTeam = homeTeam,
+                awayTeam = awayTeam,
+                homeRoster = LeagueGenerator.generatePlayersForTeam(homeTeam.id),
+                awayRoster = LeagueGenerator.generatePlayersForTeam(awayTeam.id),
                 possession = TeamId.HOME
             )
         }

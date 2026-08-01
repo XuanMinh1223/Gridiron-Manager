@@ -81,7 +81,7 @@ fun Scoreboard(state: GameState) {
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(state.awayTeam.name, style = MaterialTheme.typography.titleSmall)
+                Text(state.awayTeam.nickname, style = MaterialTheme.typography.titleSmall)
                 Text("${state.awayScore}", style = MaterialTheme.typography.displaySmall)
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -91,7 +91,7 @@ fun Scoreboard(state: GameState) {
                 Text("${minutes}:${seconds.toString().padStart(2, '0')}", style = MaterialTheme.typography.titleMedium)
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(state.homeTeam.name, style = MaterialTheme.typography.titleSmall)
+                Text(state.homeTeam.nickname, style = MaterialTheme.typography.titleSmall)
                 Text("${state.homeScore}", style = MaterialTheme.typography.displaySmall)
             }
         }
