@@ -1,0 +1,96 @@
+{
+  "conferences": [
+    {
+      "id": "AC",
+      "name": "American Conference",
+      "divisions": [
+        {
+          "id": "AC_EAST",
+          "name": "AC East",
+          "teams": [
+            { "id": "BUF", "city": "Buffalo", "nickname": "Backers", "abbreviation": "BUF", "primaryColorHex": "#00338D", "secondaryColorHex": "#C60C30" },
+            { "id": "MIA", "city": "Miami", "nickname": "Cyclone", "abbreviation": "MIA", "primaryColorHex": "#008E97", "secondaryColorHex": "#FC4C02" },
+            { "id": "NE", "city": "New England", "nickname": "Minutemen", "abbreviation": "NE", "primaryColorHex": "#002244", "secondaryColorHex": "#C60C30" },
+            { "id": "NYA", "city": "New York", "nickname": "Aviators", "abbreviation": "NYA", "primaryColorHex": "#125740", "secondaryColorHex": "#FFFFFF" }
+          ]
+        },
+        {
+          "id": "AC_NORTH",
+          "name": "AC North",
+          "teams": [
+            { "id": "BAL", "city": "Baltimore", "nickname": "Crows", "abbreviation": "BAL", "primaryColorHex": "#241773", "secondaryColorHex": "#000000" },
+            { "id": "CIN", "city": "Cincinnati", "nickname": "Tigers", "abbreviation": "CIN", "primaryColorHex": "#FB4F14", "secondaryColorHex": "#000000" },
+            { "id": "CLE", "city": "Cleveland", "nickname": "Hounds", "abbreviation": "CLE", "primaryColorHex": "#311D00", "secondaryColorHex": "#FF3C00" },
+            { "id": "PIT", "city": "Pittsburgh", "nickname": "Ironmen", "abbreviation": "PIT", "primaryColorHex": "#101820", "secondaryColorHex": "#FFB612" }
+          ]
+        },
+        {
+          "id": "AC_SOUTH",
+          "name": "AC South",
+          "teams": [
+            { "id": "HOU", "city": "Houston", "nickname": "Apollos", "abbreviation": "HOU", "primaryColorHex": "#03202F", "secondaryColorHex": "#A71930" },
+            { "id": "IND", "city": "Indianapolis", "nickname": "Racers", "abbreviation": "IND", "primaryColorHex": "#002C5F", "secondaryColorHex": "#FFFFFF" },
+            { "id": "JAX", "city": "Jacksonville", "nickname": "Cats", "abbreviation": "JAX", "primaryColorHex": "#006778", "secondaryColorHex": "#D7A22A" },
+            { "id": "TEN", "city": "Tennessee", "nickname": "Spartans", "abbreviation": "TEN", "primaryColorHex": "#4B92DB", "secondaryColorHex": "#002244" }
+          ]
+        },
+        {
+          "id": "AC_WEST",
+          "name": "AC West",
+          "teams": [
+            { "id": "DEN", "city": "Denver", "nickname": "Stallions", "abbreviation": "DEN", "primaryColorHex": "#FB4F14", "secondaryColorHex": "#002244" },
+            { "id": "KC", "city": "Kansas City", "nickname": "Pioneers", "abbreviation": "KC", "primaryColorHex": "#E31837", "secondaryColorHex": "#FFB81C" },
+            { "id": "LV", "city": "Las Vegas", "nickname": "Outlaws", "abbreviation": "LV", "primaryColorHex": "#000000", "secondaryColorHex": "#A5ACAF" },
+            { "id": "LAC", "city": "Los Angeles", "nickname": "Bolts", "abbreviation": "LAC", "primaryColorHex": "#0080C6", "secondaryColorHex": "#FFC20E" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "NC",
+      "name": "National Conference",
+      "divisions": [
+        {
+          "id": "NC_EAST",
+          "name": "NC East",
+          "teams": [
+            { "id": "DAL", "city": "Dallas", "nickname": "Marshalls", "abbreviation": "DAL", "primaryColorHex": "#00338D", "secondaryColorHex": "#B0B7BC" },
+            { "id": "NYE", "city": "New York", "nickname": "Crew", "abbreviation": "NYE", "primaryColorHex": "#0B2265", "secondaryColorHex": "#A71930" },
+            { "id": "PHI", "city": "Philadelphia", "nickname": "Bells", "abbreviation": "PHI", "primaryColorHex": "#004C54", "secondaryColorHex": "#A5ACAF" },
+            { "id": "WAS", "city": "Washington", "nickname": "Senators", "abbreviation": "WAS", "primaryColorHex": "#5A1414", "secondaryColorHex": "#FFB612" }
+          ]
+        },
+        {
+          "id": "NC_NORTH",
+          "name": "NC North",
+          "teams": [
+            { "id": "CHI", "city": "Chicago", "nickname": "Midway", "abbreviation": "CHI", "primaryColorHex": "#0B162A", "secondaryColorHex": "#C83803" },
+            { "id": "DET", "city": "Detroit", "nickname": "Spartans", "abbreviation": "DET", "primaryColorHex": "#0076B6", "secondaryColorHex": "#B0B7BC" },
+            { "id": "GB", "city": "Green Bay", "nickname": "Acme", "abbreviation": "GB", "primaryColorHex": "#203731", "secondaryColorHex": "#FFB612" },
+            { "id": "MIN", "city": "Minnesota", "nickname": "Norsemen", "abbreviation": "MIN", "primaryColorHex": "#4F2683", "secondaryColorHex": "#FFC62F" }
+          ]
+        },
+        {
+          "id": "NC_SOUTH",
+          "name": "NC South",
+          "teams": [
+            { "id": "ATL", "city": "Atlanta", "nickname": "Raptors", "abbreviation": "ATL", "primaryColorHex": "#A71930", "secondaryColorHex": "#000000" },
+            { "id": "CAR", "city": "Carolina", "nickname": "Prowlers", "abbreviation": "CAR", "primaryColorHex": "#0085CA", "secondaryColorHex": "#000000" },
+            { "id": "NO", "city": "New Orleans", "nickname": "Jazz", "abbreviation": "NO", "primaryColorHex": "#000000", "secondaryColorHex": "#D3BC8D" },
+            { "id": "TB", "city": "Tampa Bay", "nickname": "Corsairs", "abbreviation": "TB", "primaryColorHex": "#D50A0A", "secondaryColorHex": "#34302B" }
+          ]
+        },
+        {
+          "id": "NC_WEST",
+          "name": "NC West",
+          "teams": [
+            { "id": "ARI", "city": "Arizona", "nickname": "Redbirds", "abbreviation": "ARI", "primaryColorHex": "#97233F", "secondaryColorHex": "#000000" },
+            { "id": "LAR", "city": "Los Angeles", "nickname": "Bighorns", "abbreviation": "LAR", "primaryColorHex": "#003594", "secondaryColorHex": "#FFA300" },
+            { "id": "SF", "city": "San Francisco", "nickname": "Rush", "abbreviation": "SF", "primaryColorHex": "#AA0000", "secondaryColorHex": "#B3995D" },
+            { "id": "SEA", "city": "Seattle", "nickname": "Osprey", "abbreviation": "SEA", "primaryColorHex": "#002244", "secondaryColorHex": "#69BE28" }
+          ]
+        }
+      ]
+    }
+  ]
+}
