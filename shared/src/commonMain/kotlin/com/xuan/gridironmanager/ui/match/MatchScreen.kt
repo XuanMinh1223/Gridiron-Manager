@@ -14,12 +14,23 @@ import com.xuan.gridironmanager.ui.match.components.FieldCanvas
 fun MatchScreen(
     uiState: MatchUiState,
     onSnapClicked: () -> Unit,
+    onBackClicked: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
         modifier = modifier.fillMaxSize().padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        // Top Nav / Back
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Start
+        ) {
+            TextButton(onClick = onBackClicked) {
+                Text("< Back to Dashboard")
+            }
+        }
+
         // Scoreboard
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -60,6 +71,8 @@ fun MatchScreen(
         FieldCanvas(
             players = uiState.players,
             ballPos = uiState.ballPosition,
+            lineOfScrimmageY = uiState.lineOfScrimmageY,
+            firstDownMarkerY = uiState.firstDownMarkerY,
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()

@@ -45,7 +45,7 @@ class DriveEngineTest {
 
     @Test
     fun testTouchdown() {
-        val initialState = GameState(homeScore = 0)
+        val initialState = GameState(homeScore = 0, isHomePossession = true)
         val result = PlayResult(yardsGained = 50, description = "TD!", isTouchdown = true, isTurnover = false)
         
         val nextState = engine.resolvePlay(initialState, result)
@@ -53,5 +53,17 @@ class DriveEngineTest {
         assertEquals(7, nextState.homeScore)
         assertEquals(1, nextState.down)
         assertEquals(25, nextState.yardLine) // Reset after TD
+        assertEquals(false, nextState.isHomePossession) // Possession flips
+    }
+
+    @Test
+    fun testQuarterTransition() {
+        val initialState = GameState(clockSeconds = 0, quarter = 1)
+        val result = PlayResult(yardsGained = 5, description = "Play", isTouchdown = false, isTurnover = false)
+        
+        val nextState = engine.resolvePlay(initialState, result)
+        
+        assertEquals(2, nextState.quarter)
+        assertEquals(900, nextState.clockSeconds)
     }
 }

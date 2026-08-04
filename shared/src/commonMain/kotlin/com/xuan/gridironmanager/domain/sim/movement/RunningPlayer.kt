@@ -10,5 +10,6 @@ data class RunningPlayer(
     val speedYdsPerSec: Float,
     val route: Route?,
     val verticalReach: VerticalReach = VerticalReach(),
-    var currentWaypointIndex: Int = 0
+    var currentWaypointIndex: Int = 0,
+    val isOffense: Boolean = true
 )

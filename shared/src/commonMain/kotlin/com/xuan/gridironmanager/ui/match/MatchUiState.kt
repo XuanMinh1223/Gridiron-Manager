@@ -9,5 +9,7 @@ data class MatchUiState(
     val players: List<RunningPlayer> = emptyList(),
     val ballPosition: Vector3D? = null,
     val playByPlayText: String = "Ready for kick-off",
-    val isPlayRunning: Boolean = false
+    val isPlayRunning: Boolean = false,
+    val lineOfScrimmageY: Float? = null,
+    val firstDownMarkerY: Float? = null
 )
