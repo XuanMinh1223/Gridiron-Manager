@@ -80,4 +80,34 @@ class DriveEngine {
             clockSeconds = nextClockSeconds
         )
     }
+
+    fun resolveKickoff(currentState: GameState, result: KickResult): GameState {
+        val nextYardLine = if (result.isTouchback) 25 else result.endYardLine
+        
+        return GameState(
+            down = 1,
+            distance = 10,
+            yardLine = nextYardLine,
+            homeScore = currentState.homeScore,
+            awayScore = currentState.awayScore,
+            quarter = currentState.quarter,
+            clockSeconds = currentState.clockSeconds,
+            isHomePossession = !currentState.isHomePossession
+        )
+    }
+
+    fun resolvePunt(currentState: GameState, result: KickResult): GameState {
+        val nextYardLine = if (result.isTouchback) 20 else result.endYardLine
+        
+        return GameState(
+            down = 1,
+            distance = 10,
+            yardLine = nextYardLine,
+            homeScore = currentState.homeScore,
+            awayScore = currentState.awayScore,
+            quarter = currentState.quarter,
+            clockSeconds = currentState.clockSeconds,
+            isHomePossession = !currentState.isHomePossession
+        )
+    }
 }

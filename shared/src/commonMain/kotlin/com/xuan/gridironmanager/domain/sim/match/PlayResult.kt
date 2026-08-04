@@ -7,5 +7,7 @@ data class PlayResult(
     val isTurnover: Boolean,
     val clockStops: Boolean = false,
     val isFieldGoal: Boolean = false,
-    val isExtraPoint: Boolean = false
+    val isExtraPoint: Boolean = false,
+    val isKickoff: Boolean = false,
+    val isPunt: Boolean = false
 )

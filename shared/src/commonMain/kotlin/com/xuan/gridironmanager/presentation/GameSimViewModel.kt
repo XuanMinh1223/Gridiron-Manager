@@ -60,17 +60,41 @@ class GameSimViewModel : ViewModel() {
         val current = _gameState.value ?: return
         val isHomePossession = current.possession == TeamId.HOME
         
-        // Use real formations from helper
-        val offFormation = PlaySetupHelper.getShotgunFormation()
-        val defFormation = PlaySetupHelper.getBaseDefense()
+        // Determine Play Type (NFL Logic)
+        val playType = when {
+            current.playHistory.isEmpty() -> PlayType.KICK // Start of game
+            current.playHistory.lastOrNull()?.isTouchdown == true -> PlayType.KICK // After TD
+            current.down == 4 && current.distance > 5 -> PlayType.PUNT // 4th and long
+            else -> if (kotlin.random.Random.nextBoolean()) PlayType.RUN else PlayType.PASS
+        }
+
+        // Use appropriate formations
+        val offFormation = when (playType) {
+            PlayType.KICK -> PlaySetupHelper.getKickoffFormation()
+            PlayType.PUNT -> PlaySetupHelper.getPuntFormation()
+            else -> PlaySetupHelper.getShotgunFormation()
+        }
+        val defFormation = when (playType) {
+            PlayType.KICK -> PlaySetupHelper.getKickReturnFormation()
+            PlayType.PUNT -> PlaySetupHelper.getPuntReturnFormation()
+            else -> PlaySetupHelper.getBaseDefense()
+        }
         
         // World coordinates: Home attacks towards 100 (+Y), Away attacks towards 0 (-Y)
-        val losWorldY = if (isHomePossession) current.yardLine.toFloat() else (100 - current.yardLine).toFloat()
+        val offLosWorldY = when (playType) {
+            PlayType.KICK -> if (isHomePossession) 35f else 65f
+            else -> if (isHomePossession) current.yardLine.toFloat() else (100 - current.yardLine).toFloat()
+        }
+
+        val defLosWorldY = when (playType) {
+            PlayType.KICK -> if (isHomePossession) 98f else 2f
+            else -> offLosWorldY
+        }
         
         val offense = PlaySetupHelper.createRunningPlayers(
             roster = if (isHomePossession) current.homeRoster else current.awayRoster,
             formation = offFormation,
-            losWorldY = losWorldY,
+            losWorldY = offLosWorldY,
             isOffense = true,
             isAttackingUp = isHomePossession
         )
@@ -78,12 +102,10 @@ class GameSimViewModel : ViewModel() {
         val defense = PlaySetupHelper.createRunningPlayers(
             roster = if (isHomePossession) current.awayRoster else current.homeRoster,
             formation = defFormation,
-            losWorldY = losWorldY,
+            losWorldY = defLosWorldY,
             isOffense = false,
             isAttackingUp = isHomePossession
         )
-        
-        val playType = if (kotlin.random.Random.nextBoolean()) PlayType.RUN else PlayType.PASS
         
         matchPresenter.snapBall(offense, defense, playType, isHomePossession) { finalSimState, playResult ->
             _gameState.update { domainState ->
@@ -98,7 +120,9 @@ class GameSimViewModel : ViewModel() {
                     playHistory = domainState.playHistory + PlayResult(
                         description = playResult.description,
                         yardage = playResult.yardsGained,
-                        type = playType
+                        type = playType,
+                        isTouchdown = playResult.isTouchdown,
+                        isTurnover = playResult.isTurnover
                     )
                 )
             }

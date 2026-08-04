@@ -20,6 +20,8 @@ data class PlayerAttributes(
     val routeRunning: Int = 0,
     val blockPass: Int = 0,
     val tackle: Int = 0,
+    val kickPower: Int = 0,
+    val kickAccuracy: Int = 0,
     val awareness: Int,
     val playRecognition: Int
 )

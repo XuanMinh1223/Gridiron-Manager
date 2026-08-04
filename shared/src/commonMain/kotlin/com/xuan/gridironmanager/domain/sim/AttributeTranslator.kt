@@ -35,6 +35,26 @@ object AttributeTranslator {
         val varianceAt20 = 3.0f - (rating / 99.0f) * 2.5f
         return varianceAt20 * (targetDistanceYards / 20.0f)
     }
+
+    /**
+     * Maps kick power (0-99) to distance in yards.
+     * 99 = 75 yards
+     * 0 = 30 yards
+     */
+    fun calculateKickDistanceYards(kickPower: Int): Float {
+        val rating = kickPower.coerceIn(0, 99).toFloat()
+        return 30.0f + (rating / 99.0f) * 45.0f
+    }
+
+    /**
+     * Maps kick power (0-99) to hangtime in seconds.
+     * 99 = 5.2s
+     * 0 = 3.5s
+     */
+    fun calculateHangtimeSec(kickPower: Int): Float {
+        val rating = kickPower.coerceIn(0, 99).toFloat()
+        return 3.5f + (rating / 99.0f) * 1.7f
+    }
     
     /**
      * Helper to get standing height in yards.

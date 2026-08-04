@@ -2,7 +2,6 @@ package com.xuan.gridironmanager.domain.sim.match
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 class DriveEngineTest {
     private val engine = DriveEngine()
@@ -65,5 +64,29 @@ class DriveEngineTest {
         
         assertEquals(2, nextState.quarter)
         assertEquals(900, nextState.clockSeconds)
+    }
+
+    @Test
+    fun testKickoffTouchback() {
+        val initialState = GameState(isHomePossession = true)
+        val result = KickResult(endYardLine = 0, description = "Touchback", isTouchback = true, isOutOfBounds = false)
+        
+        val nextState = engine.resolveKickoff(initialState, result)
+        
+        assertEquals(25, nextState.yardLine)
+        assertEquals(false, nextState.isHomePossession)
+        assertEquals(1, nextState.down)
+    }
+
+    @Test
+    fun testPuntTouchback() {
+        val initialState = GameState(isHomePossession = true)
+        val result = KickResult(endYardLine = 0, description = "Touchback", isTouchback = true, isOutOfBounds = false)
+        
+        val nextState = engine.resolvePunt(initialState, result)
+        
+        assertEquals(20, nextState.yardLine)
+        assertEquals(false, nextState.isHomePossession)
+        assertEquals(1, nextState.down)
     }
 }
