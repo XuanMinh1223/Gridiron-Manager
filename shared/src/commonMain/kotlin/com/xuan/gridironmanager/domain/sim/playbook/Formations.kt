@@ -162,8 +162,8 @@ object Formations {
                         node("H", Position.QB, 1, 7),
                         node("TE", Position.TE, 3, 0),
                         node("TE2", Position.TE, -3, 0),
-                        node("WL", Position.WR, -4, 1),
-                        node("WR", Position.WR, 4, 1),
+                        node("WL", Position.OL, -4, 1),
+                        node("WR", Position.OL, 4, 1),
                     ),
         )
 

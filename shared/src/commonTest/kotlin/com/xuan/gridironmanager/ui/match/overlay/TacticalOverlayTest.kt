@@ -81,6 +81,18 @@ class TacticalOverlayTest {
     }
 
     @Test
+    fun testEngagedBlocksAreDrawnBetweenBlockerAndDefender() {
+        val snap = snap(Playbook.CURL_FLAT, Playbook.BASE_MAN)
+        val guard = snap.offense.first { it.role == PlayerRole.BLOCKER }
+        val tackle = snap.defense.first { it.role == PlayerRole.PASS_RUSHER }
+        guard.blockingId = tackle.id
+
+        val block = overlay(snap).blocks.single()
+
+        assertEquals(Segment(guard.currentPos, tackle.currentPos), block)
+    }
+
+    @Test
     fun testCompletedRoutesAreNotDrawn() {
         val snap = snap(Playbook.QUICK_SLANTS, Playbook.BASE_MAN)
         snap.offense.forEach { player -> player.route?.let { player.currentWaypointIndex = it.waypoints.size } }

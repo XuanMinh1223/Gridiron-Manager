@@ -53,33 +53,18 @@ class PlaySimulator(
     private var ballCarrier = if (playType == PlayType.RUN) offense.find { it.role == PlayerRole.BALL_CARRIER } else null
     private val kicker = offense.find { it.role == PlayerRole.KICKER }
 
-    /** Rushers are engaged by blockers until they shed their block, at a time that varies per rep. */
-    private val blockShedSecById: Map<String, Float> =
-        defense
-            .filter { it.role == PlayerRole.PASS_RUSHER || it.role == PlayerRole.BLITZER }
-            .associate { rusher ->
-                val meanShedSec =
-                    when {
-                        playType == PlayType.FIELD_GOAL -> FIELD_GOAL_BLOCK_SHED_SEC
-                        rusher.role == PlayerRole.BLITZER -> BLITZ_PICKUP_SHED_SEC
-                        playType == PlayType.RUN -> RUN_BLOCK_SHED_SEC
-                        else -> PASS_BLOCK_SHED_SEC
-                    }
-                val penetrationChance = if (playType == PlayType.FIELD_GOAL) FIELD_GOAL_PENETRATION_CHANCE else PENETRATION_CHANCE
-                val shedSec =
-                    if (random.nextFloat() < penetrationChance) {
-                        PENETRATION_SHED_SEC // Beats the block at the snap
-                    } else {
-                        meanShedSec * (1f + BLOCK_SHED_VARIANCE * (2f * random.nextFloat() - 1f))
-                    }
-                rusher.id to shedSec
-            }
+    private val blocking = BlockingModel(offense, defense, playType, random)
 
     private var ballTrajectory: BallTrajectory? = null
     private var throwTimeSec = 0f
     private var targetReceiver: RunningPlayer? = null
     private var fieldGoalResult: FieldGoalResult? = null
     private var carrierVelocity = Vector3D(0f, 0f, 0f)
+
+    // Elusiveness: tacklers who missed and are still recovering, and the moves that beat them
+    private val recoveringUntilSec = mutableMapOf<String, Float>()
+    private var brokenTackles = 0
+    private var firstEvasiveMove: String? = null
 
     init {
         if (playType == PlayType.KICKOFF || playType == PlayType.PUNT) {
@@ -100,6 +85,7 @@ class PlaySimulator(
 
         val carrierStart = ballCarrier?.currentPos
         moveOffense(tickDeltaSec)
+        blocking.tick(tickDeltaSec) { (ballCarrier ?: passer ?: kicker)?.currentPos }
         ballCarrier?.let { carrier ->
             carrierStart?.let { start ->
                 carrierVelocity = Vector3D((carrier.currentPos.x - start.x) / tickDeltaSec, (carrier.currentPos.y - start.y) / tickDeltaSec, 0f)
@@ -332,14 +318,67 @@ class PlaySimulator(
 
         if (snap.losYardLine + yardsGained >= Rules.FIELD_LENGTH_YDS) {
             val touchdownYards = Rules.FIELD_LENGTH_YDS - snap.losYardLine
-            return touchdown(yardsGained, if (isCatch) "TOUCHDOWN! $touchdownYards-yard catch and run!" else "TOUCHDOWN! $touchdownYards-yard run!")
+            val description = if (isCatch) "TOUCHDOWN! $touchdownYards-yard catch and run!" else "TOUCHDOWN! $touchdownYards-yard run!"
+            return touchdown(yardsGained, withBrokenTackles(description))
         }
 
-        val tackler = defense.firstOrNull { !isBlocked(it) && carrier.currentPos.distance2DTo(it.currentPos) < TACKLE_RADIUS_YDS } ?: return null
-        val description = if (isCatch) "Pass complete for $yardsGained yards!" else "Run for $yardsGained yards."
-        return fumbleOrNull(carrier, tackler, yardsGained, FUMBLE_CHANCE)
-            ?: PlayOutcome.Scrimmage(PlayResult(yardsGained, description, isTouchdown = false, isTurnover = false))
+        for (defender in defense) {
+            // A defender tied up in a block can still grab a runner who comes through their gap, but less reliably
+            val isEngaged = isBlocked(defender)
+            val reach = if (isEngaged) ENGAGED_TACKLE_RADIUS_YDS else TACKLE_RADIUS_YDS
+            if (carrier.currentPos.distance2DTo(defender.currentPos) >= reach) continue
+            if ((recoveringUntilSec[defender.id] ?: 0f) > elapsedSec) continue
+
+            val chance = tackleChance(defender, carrier) * (if (isEngaged) ENGAGED_TACKLE_FACTOR else 1f)
+            if (random.nextFloat() < chance) {
+                val description = withBrokenTackles(if (isCatch) "Pass complete for $yardsGained yards!" else "Run for $yardsGained yards.")
+                return fumbleOrNull(carrier, defender, yardsGained, FUMBLE_CHANCE)
+                    ?: PlayOutcome.Scrimmage(PlayResult(yardsGained, description, isTouchdown = false, isTurnover = false))
+            }
+            evadeTackle(carrier, defender)
+        }
+        return null
     }
+
+    /** Better tacklers bring the carrier down more often; shifty or powerful carriers slip more tackles. */
+    private fun tackleChance(
+        tackler: RunningPlayer,
+        carrier: RunningPlayer,
+    ): Float {
+        val evasion = maxOf(agility(carrier), carrier.attributes.strength)
+        return (BASE_TACKLE_CHANCE + (tackler.attributes.tackle - evasion) / TACKLE_RATING_SCALE).coerceIn(MIN_TACKLE_CHANCE, MAX_TACKLE_CHANCE)
+    }
+
+    /** The carrier makes the tackler miss: a cut away from them, while they take a moment to recover. */
+    private fun evadeTackle(
+        carrier: RunningPlayer,
+        tackler: RunningPlayer,
+    ) {
+        recoveringUntilSec[tackler.id] = elapsedSec + MISSED_TACKLE_RECOVERY_SEC
+        brokenTackles++
+        if (firstEvasiveMove == null) {
+            firstEvasiveMove =
+                when {
+                    carrier.attributes.strength > agility(carrier) -> "stiff arm"
+                    random.nextBoolean() -> "juke"
+                    else -> "spin move"
+                }
+        }
+        val awayFromTackler = if (carrier.currentPos.x >= tackler.currentPos.x) 1f else -1f
+        carrier.currentPos =
+            carrier.currentPos.copy(
+                x = (carrier.currentPos.x + awayFromTackler * EVASION_CUT_YDS).coerceIn(0f, FieldGeometry.WIDTH_YDS),
+            )
+    }
+
+    private fun agility(player: RunningPlayer) = (player.attributes.speed + player.attributes.acceleration) / 2
+
+    private fun withBrokenTackles(description: String): String =
+        when (brokenTackles) {
+            0 -> description
+            1 -> "${description.dropLast(1)} after a $firstEvasiveMove!"
+            else -> "${description.dropLast(1)}, breaking $brokenTackles tackles!"
+        }
 
     private fun tickPass(tickDeltaSec: Float): PlayOutcome? {
         ballCarrier?.let { return tickBallCarrier(it, isCatch = true) }
@@ -349,7 +388,7 @@ class PlaySimulator(
 
         if (ballTrajectory == null) {
             ballPosition = qb.currentPos
-            brain.evaluateTick(defense, tickDeltaSec)?.let { throwCommand ->
+            brain.evaluateTick(defense.filterNot(::isBlocked), tickDeltaSec)?.let { throwCommand ->
                 if (throwCommand.isThrowAway) return incomplete("Nobody open, the pass is thrown away.")
                 ballTrajectory = withThrowError(throwCommand.trajectory, qb.attributes.throwAccuracy)
                 throwTimeSec = elapsedSec
@@ -458,7 +497,7 @@ class PlaySimulator(
         )
     }
 
-    private fun isBlocked(defender: RunningPlayer) = elapsedSec < (blockShedSecById[defender.id] ?: 0f)
+    private fun isBlocked(defender: RunningPlayer) = blocking.isBlocked(defender)
 
     private fun yardsFromLos(worldY: Float): Int = ((worldY - losWorldY) * direction).toInt()
 
@@ -476,17 +515,17 @@ class PlaySimulator(
         private const val KICK_APEX_YDS = 30f
         private const val SIMPLIFIED_RETURN_YDS = 15
         private const val TACKLE_RADIUS_YDS = 1.6f
+        private const val BASE_TACKLE_CHANCE = 0.88f
+        private const val ENGAGED_TACKLE_RADIUS_YDS = 1.2f
+        private const val ENGAGED_TACKLE_FACTOR = 0.25f
+        private const val TACKLE_RATING_SCALE = 100f
+        private const val MIN_TACKLE_CHANCE = 0.5f
+        private const val MAX_TACKLE_CHANCE = 0.97f
+        private const val MISSED_TACKLE_RECOVERY_SEC = 0.7f
+        private const val EVASION_CUT_YDS = 0.8f
         private const val CATCH_RADIUS_YDS = 2.5f
         private const val DEFENDER_REACH_RADIUS_YDS = 0.7f
-        private const val RUN_BLOCK_SHED_SEC = 2.4f
-        private const val PASS_BLOCK_SHED_SEC = 2.2f // Average time in the pocket before the rush gets home
-        private const val BLITZ_PICKUP_SHED_SEC = 1.4f // Blitzers are picked up by backs and spare linemen, and win sooner
-        private const val FIELD_GOAL_BLOCK_SHED_SEC = 2.2f
-        private const val BLOCK_SHED_VARIANCE = 0.3f // Shed time varies by up to ±30%
-        private const val PENETRATION_CHANCE = 0.04f
-        private const val FIELD_GOAL_PENETRATION_CHANCE = 0.002f // Field goal protection is tight: blocks are rare
-        private const val PENETRATION_SHED_SEC = 0.2f
-        private const val RUN_READ_DELAY_SEC = 1.3f
+        private const val RUN_READ_DELAY_SEC = 0.8f
         private const val COVERAGE_CUSHION_YDS = 2f
         private const val MAN_TRAIL_YDS = 0.5f
         private const val DOWNFIELD_TARGET_YDS = 200f

@@ -23,13 +23,21 @@ object MovementEngine {
         player: RunningPlayer,
         target: Vector3D,
         tickDeltaSec: Float,
+    ) = moveToward(player, target, player.speedYdsPerSec, tickDeltaSec)
+
+    /** Moves [player] straight toward [target] at [speedYdsPerSec], stopping on it. */
+    fun moveToward(
+        player: RunningPlayer,
+        target: Vector3D,
+        speedYdsPerSec: Float,
+        tickDeltaSec: Float,
     ) {
         val dx = target.x - player.currentPos.x
         val dy = target.y - player.currentPos.y
         val distance = sqrt(dx * dx + dy * dy)
         if (distance == 0f) return
 
-        val moveDistance = min(player.speedYdsPerSec * tickDeltaSec, distance)
+        val moveDistance = min(speedYdsPerSec * tickDeltaSec, distance)
         player.currentPos =
             Vector3D(
                 x = player.currentPos.x + dx / distance * moveDistance,

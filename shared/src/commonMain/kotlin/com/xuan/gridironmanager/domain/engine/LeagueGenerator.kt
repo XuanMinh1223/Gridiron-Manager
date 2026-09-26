@@ -83,7 +83,14 @@ object LeagueGenerator {
                 throwAccuracy = if (position == Position.QB) rating(80, 99) else rating(10, 40),
                 catching = if (position == Position.WR || position == Position.TE) rating(80, 99) else rating(20, 60),
                 routeRunning = if (position == Position.WR) rating(80, 99) else rating(10, 50),
-                blockPass = if (position in offensiveLine) rating(80, 99) else rating(10, 40),
+                blockPass =
+                    when (position) {
+                        in offensiveLine -> rating(80, 99)
+                        Position.TE -> rating(60, 85)
+                        Position.RB -> rating(40, 70)
+                        Position.WR -> rating(20, 50)
+                        else -> rating(10, 40)
+                    },
                 tackle = if (position.type == PositionType.DEFENSE) rating(70, 99) else rating(10, 50),
                 kickPower = if (isKicker) rating(75, 99) else rating(10, 40),
                 kickAccuracy = if (isKicker) rating(75, 99) else rating(10, 40),

@@ -23,6 +23,8 @@ data class TacticalOverlay(
     val manLinks: List<Segment> = emptyList(),
     val zones: List<ZoneMarker> = emptyList(),
     val blitzArrows: List<Segment> = emptyList(),
+    /** Blockers and the defenders they are engaged with. */
+    val blocks: List<Segment> = emptyList(),
 ) {
     companion object {
         val NONE = TacticalOverlay()
@@ -61,6 +63,7 @@ data class TacticalOverlay(
                     } else {
                         defense.filter { it.role == PlayerRole.BLITZER }.map { Segment(it.currentPos, passer.currentPos) }
                     },
+                blocks = offense.mapNotNull { blocker -> blocker.blockingId?.let(byId::get)?.let { Segment(blocker.currentPos, it.currentPos) } },
             )
         }
 

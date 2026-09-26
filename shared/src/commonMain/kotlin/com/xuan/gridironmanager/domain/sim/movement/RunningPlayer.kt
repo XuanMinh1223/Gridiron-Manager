@@ -40,4 +40,6 @@ data class RunningPlayer(
     val coverageTargetId: String? = null,
     /** For [PlayerRole.ZONE_COVERAGE]: the spot on the field this defender drops to. */
     val zoneLandmark: Vector3D? = null,
+    /** For blockers: the id of the defender they are currently engaged with. */
+    var blockingId: String? = null,
 )

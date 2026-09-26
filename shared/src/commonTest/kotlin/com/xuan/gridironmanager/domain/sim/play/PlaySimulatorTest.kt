@@ -3,7 +3,9 @@ package com.xuan.gridironmanager.domain.sim.play
 import com.xuan.gridironmanager.domain.model.PlayType
 import com.xuan.gridironmanager.domain.model.PlayerAttributes
 import com.xuan.gridironmanager.domain.model.Position
+import com.xuan.gridironmanager.domain.model.Route
 import com.xuan.gridironmanager.domain.model.Vector3D
+import com.xuan.gridironmanager.domain.model.Waypoint
 import com.xuan.gridironmanager.domain.sim.FieldGeometry
 import com.xuan.gridironmanager.domain.sim.match.GameState
 import com.xuan.gridironmanager.domain.sim.match.PlayOutcome
@@ -100,6 +102,44 @@ class PlaySimulatorTest {
         val outcome = run(PlaySimulator(snap))
 
         assertEquals("Play whistled dead.", outcome.description)
+    }
+
+    @Test
+    fun testElusiveCarriersBreakMoreTacklesAgainstPoorTacklers() {
+        fun brokenTackleRate(tackle: Int): Float {
+            val broken =
+                (0 until 200).count { seed ->
+                    val carrier =
+                        RunningPlayer(
+                            id = "RB",
+                            currentPos = Vector3D(FieldGeometry.CENTER_X, 30f, 0f),
+                            speedYdsPerSec = 9f,
+                            route = Route("Dive", listOf(Waypoint(FieldGeometry.CENTER_X, 200f))),
+                            role = PlayerRole.BALL_CARRIER,
+                            attributes = PlayerAttributes.AVERAGE.copy(speed = 95, acceleration = 95, strength = 60),
+                        )
+                    val tackler =
+                        RunningPlayer(
+                            id = "LB",
+                            currentPos = Vector3D(FieldGeometry.CENTER_X, 40f, 0f),
+                            speedYdsPerSec = 0f,
+                            route = null,
+                            isOffense = false,
+                            role = PlayerRole.ROUTE_ONLY,
+                            attributes = PlayerAttributes.AVERAGE.copy(tackle = tackle),
+                        )
+                    val snap = Snap(listOf(carrier), listOf(tackler), PlayType.RUN, 30, isAttackingUp = true)
+                    val description = run(PlaySimulator(snap, Random(seed))).description
+                    description.contains("TOUCHDOWN") || description.contains("after a")
+                }
+            return broken / 200f
+        }
+
+        val againstPoorTackler = brokenTackleRate(tackle = 40)
+        val againstGoodTackler = brokenTackleRate(tackle = 99)
+
+        assertTrue(againstPoorTackler > againstGoodTackler, "Broke $againstPoorTackler vs $againstGoodTackler")
+        assertTrue(againstGoodTackler < 0.25f, "A sure tackler should usually bring the runner down")
     }
 
     @Test

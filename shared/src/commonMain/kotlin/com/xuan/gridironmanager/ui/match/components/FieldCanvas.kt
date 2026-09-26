@@ -36,6 +36,7 @@ private val ManLinkColor = Color.White.copy(alpha = 0.7f)
 private val DeepZoneColor = Color(0xFF42A5F5)
 private val UnderneathZoneColor = Color(0xFFFFCA28)
 private val BlitzColor = Color(0xFFFF5252)
+private val BlockColor = Color(0xFFFF9800)
 
 /**
  * The field, with world coordinates (see [FieldGeometry]) mapped onto it at a uniform scale so distances and zone
@@ -182,6 +183,10 @@ private fun DrawScope.drawOverlay(
         }
         drawPath(path, RouteColor, style = Stroke(2.dp.toPx()))
         if (route.size >= 2) drawArrowHead(field.toOffset(route[route.size - 2]), field.toOffset(route.last()), RouteColor)
+    }
+
+    overlay.blocks.forEach { block ->
+        drawLine(BlockColor, field.toOffset(block.from), field.toOffset(block.to), strokeWidth = 3.dp.toPx())
     }
 
     overlay.blitzArrows.forEach { arrow -> drawArrow(field, arrow, BlitzColor) }
