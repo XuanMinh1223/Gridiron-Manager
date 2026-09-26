@@ -13,6 +13,8 @@ interface MatchActions {
 
     fun snapBall()
 
+    fun setShowAssignments(enabled: Boolean)
+
     fun setSimSpeed(speed: SimSpeed)
 
     /** Instantly plays out the rest of the game, with the CPU calling plays for both teams. */

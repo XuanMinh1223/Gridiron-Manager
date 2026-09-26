@@ -5,6 +5,7 @@ import com.xuan.gridironmanager.domain.sim.match.GameState
 import com.xuan.gridironmanager.domain.sim.movement.RunningPlayer
 import com.xuan.gridironmanager.domain.sim.playbook.DefensiveCall
 import com.xuan.gridironmanager.domain.sim.playbook.OffensivePlay
+import com.xuan.gridironmanager.ui.match.overlay.TacticalOverlay
 
 data class MatchUiState(
     val gameState: GameState = GameState.openingKickoff(),
@@ -17,6 +18,8 @@ data class MatchUiState(
     val firstDownMarkerY: Float? = null,
     val playCall: PlayCallState = PlayCallState(),
     val simSpeed: SimSpeed = SimSpeed.X1,
+    val showAssignments: Boolean = true,
+    val overlay: TacticalOverlay = TacticalOverlay.NONE,
 )
 
 /** The user's play-calling options for the next snap. */

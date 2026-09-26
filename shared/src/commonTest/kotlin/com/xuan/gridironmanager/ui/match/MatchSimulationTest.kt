@@ -4,6 +4,7 @@ import com.xuan.gridironmanager.domain.sim.match.GamePhase
 import com.xuan.gridironmanager.domain.sim.match.GameState
 import com.xuan.gridironmanager.domain.sim.playbook.Playbook
 import com.xuan.gridironmanager.testMatchup
+import com.xuan.gridironmanager.ui.match.overlay.TacticalOverlay
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -182,6 +183,60 @@ class MatchSimulationTest {
             assertTrue(state.gameState.isGameOver)
             assertFalse(state.isPlayRunning)
             assertTrue(state.playByPlayText.startsWith("Quick sim complete"))
+        }
+
+    @Test
+    fun testPreviewLinesUpTheSelectedPlayWithTheUsersAssignments() =
+        testScope.runTest {
+            val presenter = presenter()
+            presenter.startMatch(matchup, homeFirstAndTen)
+
+            presenter.selectOffensivePlay(Playbook.FOUR_VERTICALS)
+
+            val state = presenter.uiState.value
+            assertEquals(22, state.players.size)
+            assertEquals(5, state.overlay.routes.size)
+            assertTrue(state.overlay.manLinks.isEmpty() && state.overlay.zones.isEmpty(), "The CPU defense's coverage stays hidden")
+        }
+
+    @Test
+    fun testUserOnDefenseSeesTheirCoverageNotTheOpponentsRoutes() =
+        testScope.runTest {
+            val presenter = presenter()
+            presenter.startMatch(matchup, homeFirstAndTen.copy(isHomePossession = false))
+
+            presenter.selectDefensiveCall(Playbook.COVER_3)
+
+            val overlay = presenter.uiState.value.overlay
+            assertEquals(7, overlay.zones.size)
+            assertTrue(overlay.routes.isEmpty())
+        }
+
+    @Test
+    fun testAssignmentsCanBeHidden() =
+        testScope.runTest {
+            val presenter = presenter()
+            presenter.startMatch(matchup, homeFirstAndTen)
+
+            presenter.setShowAssignments(false)
+
+            assertEquals(TacticalOverlay.NONE, presenter.uiState.value.overlay)
+            assertEquals(22, presenter.uiState.value.players.size, "Players still line up")
+        }
+
+    @Test
+    fun testNextPlayIsPreviewedAfterTheResult() =
+        testScope.runTest {
+            val presenter = presenter()
+            presenter.startMatch(matchup, homeFirstAndTen)
+
+            presenter.snapBall()
+            advanceUntilIdle()
+
+            val state = presenter.uiState.value
+            assertFalse(state.isPlayRunning)
+            assertEquals(22, state.players.size)
+            assertTrue(state.players.all { it.currentWaypointIndex == 0 }, "Players are back in formation")
         }
 
     @Test

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -94,6 +95,7 @@ fun MatchScreen(
             ballPos = uiState.ballPosition,
             lineOfScrimmageY = uiState.lineOfScrimmageY,
             firstDownMarkerY = uiState.firstDownMarkerY,
+            overlay = uiState.overlay,
             modifier =
                 Modifier
                     .weight(1f)
@@ -133,8 +135,11 @@ fun MatchScreen(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("Auto-call plays", modifier = Modifier.weight(1f))
+                    Text("Auto-call", modifier = Modifier.weight(1f))
                     Switch(checked = playCall.isAutoCall, onCheckedChange = actions::setAutoCall)
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Text("Assignments", modifier = Modifier.weight(1f))
+                    Switch(checked = uiState.showAssignments, onCheckedChange = actions::setShowAssignments)
                 }
 
                 SimControls(
