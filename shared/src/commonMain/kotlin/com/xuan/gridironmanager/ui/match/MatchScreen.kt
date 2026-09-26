@@ -28,12 +28,17 @@ import com.xuan.gridironmanager.domain.sim.match.GameState
 import com.xuan.gridironmanager.ui.match.components.FieldCanvas
 import com.xuan.gridironmanager.ui.match.components.PlayCallPanel
 import com.xuan.gridironmanager.ui.match.components.SimControls
+import com.xuan.gridironmanager.ui.match.components.teamPalette
 
 @Composable
 fun MatchScreen(
     uiState: MatchUiState,
     homeTeamName: String,
     awayTeamName: String,
+    homeTeamPrimaryColorHex: String,
+    homeTeamSecondaryColorHex: String,
+    awayTeamPrimaryColorHex: String,
+    awayTeamSecondaryColorHex: String,
     actions: MatchActions,
     onBackClicked: () -> Unit,
     modifier: Modifier = Modifier,
@@ -97,6 +102,17 @@ fun MatchScreen(
             lineOfScrimmageY = uiState.lineOfScrimmageY,
             firstDownMarkerY = uiState.firstDownMarkerY,
             overlay = uiState.overlay,
+            isAttackingUp = uiState.isAttackingUp,
+            offensePalette = if (gameState.isHomePossession) {
+                teamPalette(homeTeamPrimaryColorHex, homeTeamSecondaryColorHex)
+            } else {
+                teamPalette(awayTeamPrimaryColorHex, awayTeamSecondaryColorHex)
+            },
+            defensePalette = if (gameState.isHomePossession) {
+                teamPalette(awayTeamPrimaryColorHex, awayTeamSecondaryColorHex)
+            } else {
+                teamPalette(homeTeamPrimaryColorHex, homeTeamSecondaryColorHex)
+            },
             modifier =
                 Modifier
                     .weight(1f)

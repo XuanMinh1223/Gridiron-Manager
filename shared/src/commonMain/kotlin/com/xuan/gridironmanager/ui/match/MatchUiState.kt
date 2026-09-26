@@ -21,6 +21,8 @@ data class MatchUiState(
     val showAssignments: Boolean = true,
     val isDebugMode: Boolean = false,
     val overlay: TacticalOverlay = TacticalOverlay.NONE,
+    /** Direction of the currently previewed/live offense in world coordinates. */
+    val isAttackingUp: Boolean = true,
 )
 
 /** The user's play-calling options for the next snap. */

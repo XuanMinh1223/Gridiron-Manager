@@ -224,6 +224,7 @@ class MatchPresenter(
             players = snap.offense + snap.defense,
             lineOfScrimmageY = snap.losWorldY,
             firstDownMarkerY = if (showsFirstDownLine) snap.losWorldY + state.distance * direction else null,
+            isAttackingUp = snap.isAttackingUp,
         )
     }
 

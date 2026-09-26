@@ -55,6 +55,10 @@ fun App() {
                     uiState = matchUiState,
                     homeTeamName = matchup?.homeTeam?.abbreviation ?: "HOME",
                     awayTeamName = matchup?.awayTeam?.abbreviation ?: "AWAY",
+                    homeTeamPrimaryColorHex = matchup?.homeTeam?.primaryColorHex ?: "#0D47A1",
+                    homeTeamSecondaryColorHex = matchup?.homeTeam?.secondaryColorHex ?: "#FFFFFF",
+                    awayTeamPrimaryColorHex = matchup?.awayTeam?.primaryColorHex ?: "#C62828",
+                    awayTeamSecondaryColorHex = matchup?.awayTeam?.secondaryColorHex ?: "#FFFFFF",
                     actions = viewModel.matchActions,
                     onBackClicked = { currentScreen = Screen.DASHBOARD },
                 )
