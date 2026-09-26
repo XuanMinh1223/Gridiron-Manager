@@ -16,37 +16,37 @@ fun FieldCanvas(
     ballPos: Vector3D?,
     lineOfScrimmageY: Float? = null,
     firstDownMarkerY: Float? = null,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     Canvas(modifier = modifier) {
         val fieldWidthYds = 53.3f
         val fieldHeightTotalYds = 120.0f
         val endzoneDepthYds = 10.0f
-        
+
         val scaleX = size.width / fieldWidthYds
         val scaleY = size.height / fieldHeightTotalYds
-        
+
         // Draw Main Field
         drawRect(
             color = Color(0xFF2E7D32),
-            size = size
+            size = size,
         )
-        
+
         // Draw Endzones
         // Endzone 1 (Bottom, 0-10yds)
         drawRect(
             color = Color(0xFF1B5E20),
             topLeft = Offset(0f, 0f),
-            size = Size(size.width, endzoneDepthYds * scaleY)
+            size = Size(size.width, endzoneDepthYds * scaleY),
         )
         // Endzone 2 (Top, 110-120yds)
         drawRect(
             color = Color(0xFF1B5E20),
             topLeft = Offset(0f, 110f * scaleY),
-            size = Size(size.width, endzoneDepthYds * scaleY)
+            size = Size(size.width, endzoneDepthYds * scaleY),
         )
 
-            // Draw Yard Lines (every 10 yards, from 10 to 110)
+        // Draw Yard Lines (every 10 yards, from 10 to 110)
         for (y in 10..110 step 10) {
             val yPos = y * scaleY
             val alpha = if (y == 10 || y == 110) 1.0f else 0.5f
@@ -54,7 +54,7 @@ fun FieldCanvas(
                 color = Color.White.copy(alpha = alpha),
                 start = Offset(0f, yPos),
                 end = Offset(size.width, yPos),
-                strokeWidth = (if (y == 10 || y == 110) 3.dp else 2.dp).toPx()
+                strokeWidth = (if (y == 10 || y == 110) 3.dp else 2.dp).toPx(),
             )
         }
 
@@ -65,7 +65,7 @@ fun FieldCanvas(
                 color = Color.Blue.copy(alpha = 0.8f),
                 start = Offset(0f, yPos),
                 end = Offset(size.width, yPos),
-                strokeWidth = 3.dp.toPx()
+                strokeWidth = 3.dp.toPx(),
             )
         }
 
@@ -76,7 +76,7 @@ fun FieldCanvas(
                 color = Color.Yellow.copy(alpha = 0.8f),
                 start = Offset(0f, yPos),
                 end = Offset(size.width, yPos),
-                strokeWidth = 3.dp.toPx()
+                strokeWidth = 3.dp.toPx(),
             )
         }
 
@@ -89,14 +89,14 @@ fun FieldCanvas(
                     color = Color.White.copy(alpha = 0.3f),
                     start = Offset(fieldWidthYds * 0.4f * scaleX, yPos),
                     end = Offset(fieldWidthYds * 0.42f * scaleX, yPos),
-                    strokeWidth = 1.dp.toPx()
+                    strokeWidth = 1.dp.toPx(),
                 )
                 // Right Hash
                 drawLine(
                     color = Color.White.copy(alpha = 0.3f),
                     start = Offset(fieldWidthYds * 0.58f * scaleX, yPos),
                     end = Offset(fieldWidthYds * 0.6f * scaleX, yPos),
-                    strokeWidth = 1.dp.toPx()
+                    strokeWidth = 1.dp.toPx(),
                 )
             }
         }
@@ -106,14 +106,14 @@ fun FieldCanvas(
             color = Color.Yellow,
             start = Offset(fieldWidthYds * 0.45f * scaleX, 5f * scaleY),
             end = Offset(fieldWidthYds * 0.55f * scaleX, 5f * scaleY),
-            strokeWidth = 4.dp.toPx()
+            strokeWidth = 4.dp.toPx(),
         )
         // Draw Goal Posts (Top)
         drawLine(
             color = Color.Yellow,
             start = Offset(fieldWidthYds * 0.45f * scaleX, 115f * scaleY),
             end = Offset(fieldWidthYds * 0.55f * scaleX, 115f * scaleY),
-            strokeWidth = 4.dp.toPx()
+            strokeWidth = 4.dp.toPx(),
         )
 
         // Draw Players
@@ -124,10 +124,11 @@ fun FieldCanvas(
             drawCircle(
                 color = color,
                 radius = 6.dp.toPx(),
-                center = Offset(
-                    player.currentPos.x * scaleX,
-                    fieldY * scaleY
-                )
+                center =
+                    Offset(
+                        player.currentPos.x * scaleX,
+                        fieldY * scaleY,
+                    ),
             )
         }
 
@@ -139,10 +140,11 @@ fun FieldCanvas(
             drawCircle(
                 color = Color(0xFF5D4037),
                 radius = ballRadiusBase * elevationScale,
-                center = Offset(
-                    pos.x * scaleX,
-                    fieldY * scaleY
-                )
+                center =
+                    Offset(
+                        pos.x * scaleX,
+                        fieldY * scaleY,
+                    ),
             )
         }
     }

@@ -9,7 +9,7 @@ data class Team(
     val nickname: String,
     val abbreviation: String,
     val primaryColorHex: String,
-    val secondaryColorHex: String
+    val secondaryColorHex: String,
 ) {
     val fullName: String get() = "$city $nickname"
 }
@@ -18,17 +18,17 @@ data class Team(
 data class Division(
     val id: String,
     val name: String,
-    val teams: List<Team>
+    val teams: List<Team>,
 )
 
 @Serializable
 data class Conference(
     val id: String,
     val name: String,
-    val divisions: List<Division>
+    val divisions: List<Division>,
 )
 
 @Serializable
 data class LeagueDatabase(
-    val conferences: List<Conference>
+    val conferences: List<Conference>,
 )

@@ -18,7 +18,10 @@ object AttributeTranslator {
      * 99 jump = 40 inches
      * 0 jump = 10 inches
      */
-    fun calculateMaxCatchHeightYards(heightInches: Int, verticalJumpRating: Int): Float {
+    fun calculateMaxCatchHeightYards(
+        heightInches: Int,
+        verticalJumpRating: Int,
+    ): Float {
         val jumpRating = verticalJumpRating.coerceIn(0, 99).toFloat()
         val jumpInches = 10.0f + (jumpRating / 99.0f) * 30.0f
         return (heightInches + jumpInches) * INCH_TO_YARD
@@ -30,7 +33,10 @@ object AttributeTranslator {
      * 99 accuracy = 0.5 yard variance at 20 yards.
      * 0 accuracy = 3.0 yard variance at 20 yards.
      */
-    fun calculatePassAccuracyRadius(accuracyRating: Int, targetDistanceYards: Float): Float {
+    fun calculatePassAccuracyRadius(
+        accuracyRating: Int,
+        targetDistanceYards: Float,
+    ): Float {
         val rating = accuracyRating.coerceIn(0, 99).toFloat()
         val varianceAt20 = 3.0f - (rating / 99.0f) * 2.5f
         return varianceAt20 * (targetDistanceYards / 20.0f)
@@ -55,11 +61,9 @@ object AttributeTranslator {
         val rating = kickPower.coerceIn(0, 99).toFloat()
         return 3.5f + (rating / 99.0f) * 1.7f
     }
-    
+
     /**
      * Helper to get standing height in yards.
      */
-    fun calculateStandingHeightYards(heightInches: Int): Float {
-        return heightInches * INCH_TO_YARD
-    }
+    fun calculateStandingHeightYards(heightInches: Int): Float = heightInches * INCH_TO_YARD
 }

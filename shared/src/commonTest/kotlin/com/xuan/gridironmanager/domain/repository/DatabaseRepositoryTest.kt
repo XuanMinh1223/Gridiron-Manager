@@ -5,10 +5,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class DatabaseRepositoryTest {
-
     @Test
     fun testTeamRepositoryParsesJson() {
-        val jsonString = """
+        val jsonString =
+            """
             {
               "conferences": [
                 {
@@ -41,7 +41,7 @@ class DatabaseRepositoryTest {
                 }
               ]
             }
-        """.trimIndent()
+            """.trimIndent()
 
         val repository = TeamRepository { jsonString }
         val teams = repository.getAllTeams()
@@ -53,7 +53,8 @@ class DatabaseRepositoryTest {
 
     @Test
     fun testPlayerRepositoryUpdatesState() {
-        val initialJson = """
+        val initialJson =
+            """
             {
               "formatVersion": 1,
               "players": [
@@ -81,15 +82,16 @@ class DatabaseRepositoryTest {
                 }
               ]
             }
-        """.trimIndent()
+            """.trimIndent()
 
         val repository = PlayerRepository { initialJson }
-        
+
         val balPlayers = repository.getPlayersByTeam("BAL")
         assertEquals(1, balPlayers.size)
         assertEquals("Lamar", balPlayers[0].firstName)
 
-        val customJson = """
+        val customJson =
+            """
             {
               "formatVersion": 1,
               "players": [
@@ -106,10 +108,10 @@ class DatabaseRepositoryTest {
                 }
               ]
             }
-        """.trimIndent()
+            """.trimIndent()
 
         repository.loadCustomRoster(customJson)
-        
+
         val newBalPlayers = repository.getPlayersByTeam("BAL")
         assertEquals(1, newBalPlayers.size)
         assertEquals("Mark", newBalPlayers[0].firstName)

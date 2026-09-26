@@ -2,10 +2,8 @@ package com.xuan.gridironmanager.domain.sim
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 class AttributeTranslatorTest {
-
     @Test
     fun testCalculateSpeedYardsPerSec() {
         assertEquals(10.0f, AttributeTranslator.calculateSpeedYardsPerSec(99), 0.001f)
@@ -29,7 +27,7 @@ class AttributeTranslatorTest {
         // 0 accuracy = 3.0 radius
         assertEquals(0.5f, AttributeTranslator.calculatePassAccuracyRadius(99, 20f), 0.001f)
         assertEquals(3.0f, AttributeTranslator.calculatePassAccuracyRadius(0, 20f), 0.001f)
-        
+
         // At 40 yards, radius should double
         assertEquals(1.0f, AttributeTranslator.calculatePassAccuracyRadius(99, 40f), 0.001f)
         assertEquals(6.0f, AttributeTranslator.calculatePassAccuracyRadius(0, 40f), 0.001f)

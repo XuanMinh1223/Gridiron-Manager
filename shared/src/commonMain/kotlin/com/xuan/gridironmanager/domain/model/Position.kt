@@ -1,6 +1,9 @@
 package com.xuan.gridironmanager.domain.model
 
-enum class Position(val abbreviation: String, val type: PositionType) {
+enum class Position(
+    val abbreviation: String,
+    val type: PositionType,
+) {
     QB("QB", PositionType.OFFENSE),
     RB("RB", PositionType.OFFENSE),
     WR("WR", PositionType.OFFENSE),
@@ -16,9 +19,11 @@ enum class Position(val abbreviation: String, val type: PositionType) {
     CB("CB", PositionType.DEFENSE),
     S("S", PositionType.DEFENSE),
     K("K", PositionType.SPECIAL_TEAMS),
-    P("P", PositionType.SPECIAL_TEAMS)
+    P("P", PositionType.SPECIAL_TEAMS),
 }
 
 enum class PositionType {
-    OFFENSE, DEFENSE, SPECIAL_TEAMS
+    OFFENSE,
+    DEFENSE,
+    SPECIAL_TEAMS,
 }

@@ -13,34 +13,40 @@ import kotlinx.coroutines.flow.stateIn
 
 sealed interface RosterUiState {
     data object Loading : RosterUiState
-    data class Success(val players: List<Player>) : RosterUiState
-    data class Error(val message: String) : RosterUiState
+
+    data class Success(
+        val players: List<Player>,
+    ) : RosterUiState
+
+    data class Error(
+        val message: String,
+    ) : RosterUiState
 }
 
 class RosterPresenter(
     private val playerRepository: PlayerRepository,
-    private val teamId: String
+    private val teamId: String,
 ) : ViewModel() {
-
-    val uiState: StateFlow<RosterUiState> = playerRepository.players
-        .map { allPlayers ->
-            val filteredPlayers = allPlayers.filter { it.teamId == teamId }
-            if (filteredPlayers.isEmpty()) {
-                RosterUiState.Loading // Or Error if we expect players to exist
-            } else {
-                val sortedPlayers = filteredPlayers.sortedWith(
-                    compareBy<Player> { getPositionTypePriority(it.position) }
-                        .thenBy { getPositionPriority(it.position) }
-                        .thenByDescending { it.overallRating }
-                )
-                RosterUiState.Success(sortedPlayers)
-            }
-        }
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = RosterUiState.Loading
-        )
+    val uiState: StateFlow<RosterUiState> =
+        playerRepository.players
+            .map { allPlayers ->
+                val filteredPlayers = allPlayers.filter { it.teamId == teamId }
+                if (filteredPlayers.isEmpty()) {
+                    RosterUiState.Loading // Or Error if we expect players to exist
+                } else {
+                    val sortedPlayers =
+                        filteredPlayers.sortedWith(
+                            compareBy<Player> { getPositionTypePriority(it.position) }
+                                .thenBy { getPositionPriority(it.position) }
+                                .thenByDescending { it.overallRating },
+                        )
+                    RosterUiState.Success(sortedPlayers)
+                }
+            }.stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5000),
+                initialValue = RosterUiState.Loading,
+            )
 
     private fun getPositionTypePriority(positionAbbr: String): Int {
         val position = Position.entries.find { it.abbreviation == positionAbbr }
@@ -52,8 +58,8 @@ class RosterPresenter(
         }
     }
 
-    private fun getPositionPriority(positionAbbr: String): Int {
-        return when (positionAbbr) {
+    private fun getPositionPriority(positionAbbr: String): Int =
+        when (positionAbbr) {
             "QB" -> 1
             "RB" -> 2
             "WR" -> 3
@@ -67,5 +73,4 @@ class RosterPresenter(
             "P" -> 11
             else -> 99
         }
-    }
 }

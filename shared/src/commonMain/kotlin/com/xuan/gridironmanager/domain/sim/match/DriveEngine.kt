@@ -1,113 +1,126 @@
 package com.xuan.gridironmanager.domain.sim.match
 
 class DriveEngine {
-    fun resolvePlay(currentState: GameState, result: PlayResult): GameState {
-        // 1. Clock Management (if not already handled by real-time sim)
-        // If clockStops is false, we might deduct some "between play" time if it wasn't fully simulated.
-        // For simplicity, we'll assume MatchPresenter handles real-time clock during the play.
-        // But we might need to deduct time for the huddle/setup here if needed.
-        
-        var nextClockSeconds = currentState.clockSeconds
-        var nextQuarter = currentState.quarter
+    fun resolvePlay(
+        currentState: GameState,
+        result: PlayResult,
+    ): GameState {
+        if (currentState.isGameOver) return currentState
 
-        if (nextClockSeconds <= 0) {
-            if (nextQuarter < 4) {
-                nextQuarter++
-                nextClockSeconds = 900
-            } else {
-                // Game Over logic could go here
-                return currentState.copy(clockSeconds = 0)
+        val newYardLine = (currentState.yardLine + result.yardsGained).coerceIn(0, Rules.FIELD_LENGTH_YDS)
+
+        val nextState =
+            when {
+                result.isTurnover -> {
+                    val defenseYardLine = Rules.FIELD_LENGTH_YDS - newYardLine
+                    // A turnover in the defense's own end zone is downed for a touchback
+                    changeOfPossession(
+                        currentState,
+                        yardLine = if (defenseYardLine <= 0) Rules.INTERCEPTION_TOUCHBACK_YARD_LINE else defenseYardLine,
+                    )
+                }
+
+                result.isTouchdown || newYardLine >= Rules.FIELD_LENGTH_YDS -> {
+                    scoreTouchdown(currentState)
+                }
+
+                result.yardsGained >= currentState.distance -> {
+                    currentState.copy(
+                        down = 1,
+                        distance = firstDownDistance(newYardLine),
+                        yardLine = newYardLine,
+                    )
+                }
+
+                currentState.down >= 4 -> {
+                    // Turnover on downs
+                    changeOfPossession(currentState, yardLine = Rules.FIELD_LENGTH_YDS - newYardLine)
+                }
+
+                else -> {
+                    currentState.copy(
+                        down = currentState.down + 1,
+                        distance = currentState.distance - result.yardsGained,
+                        yardLine = newYardLine,
+                    )
+                }
             }
+
+        val clockKeepsRunning =
+            !result.clockStops &&
+                nextState.isHomePossession == currentState.isHomePossession &&
+                !nextState.isKickoffPending
+        val runoff = if (clockKeepsRunning) Rules.BETWEEN_PLAY_RUNOFF_SEC else 0
+
+        return advanceClock(nextState.copy(clockSeconds = (nextState.clockSeconds - runoff).coerceAtLeast(0)))
+    }
+
+    fun resolveKickoff(
+        currentState: GameState,
+        result: KickResult,
+    ): GameState = resolveKick(currentState, if (result.isTouchback) Rules.KICKOFF_TOUCHBACK_YARD_LINE else result.endYardLine)
+
+    fun resolvePunt(
+        currentState: GameState,
+        result: KickResult,
+    ): GameState = resolveKick(currentState, if (result.isTouchback) Rules.PUNT_TOUCHBACK_YARD_LINE else result.endYardLine)
+
+    private fun resolveKick(
+        currentState: GameState,
+        receivingYardLine: Int,
+    ): GameState {
+        if (currentState.isGameOver) return currentState
+        return advanceClock(changeOfPossession(currentState, receivingYardLine))
+    }
+
+    private fun scoreTouchdown(state: GameState): GameState =
+        state.copy(
+            down = 1,
+            distance = Rules.FIRST_DOWN_DISTANCE,
+            yardLine = Rules.KICKOFF_YARD_LINE,
+            homeScore = if (state.isHomePossession) state.homeScore + Rules.TOUCHDOWN_POINTS else state.homeScore,
+            awayScore = if (!state.isHomePossession) state.awayScore + Rules.TOUCHDOWN_POINTS else state.awayScore,
+            // The scoring team keeps possession in order to kick off
+            isKickoffPending = true,
+        )
+
+    private fun changeOfPossession(
+        state: GameState,
+        yardLine: Int,
+    ): GameState =
+        state.copy(
+            down = 1,
+            distance = firstDownDistance(yardLine),
+            yardLine = yardLine,
+            isHomePossession = !state.isHomePossession,
+            isKickoffPending = false,
+        )
+
+    /** Rolls the quarter over once the clock expires, handling halftime and the end of the game. */
+    private fun advanceClock(state: GameState): GameState {
+        if (state.clockSeconds > 0) return state
+
+        if (state.quarter >= Rules.QUARTERS) {
+            return state.copy(clockSeconds = 0, isGameOver = true)
         }
 
-        if (result.isTurnover) {
-            return GameState(
+        val nextQuarter = state.quarter + 1
+        val rolledOver = state.copy(quarter = nextQuarter, clockSeconds = Rules.QUARTER_LENGTH_SEC)
+
+        return if (nextQuarter == 3) {
+            // Halftime: the home team kicked the opening kickoff, so the away team kicks to start the second half
+            rolledOver.copy(
                 down = 1,
-                distance = 10,
-                yardLine = 100 - (currentState.yardLine + result.yardsGained).coerceIn(0, 100),
-                homeScore = currentState.homeScore,
-                awayScore = currentState.awayScore,
-                quarter = nextQuarter,
-                clockSeconds = nextClockSeconds,
-                isHomePossession = !currentState.isHomePossession
+                distance = Rules.FIRST_DOWN_DISTANCE,
+                yardLine = Rules.KICKOFF_YARD_LINE,
+                isHomePossession = false,
+                isKickoffPending = true,
             )
-        }
-
-        val newYardLine = (currentState.yardLine + result.yardsGained).coerceIn(0, 100)
-        
-        if (result.isTouchdown || newYardLine >= 100) {
-            // NFL Rules: TD = 6 pts. Simplified: 6 + 1 (XP) = 7
-            val points = 7 
-            return GameState(
-                down = 1,
-                distance = 10,
-                yardLine = 25, // Kickoff touchback
-                homeScore = if (currentState.isHomePossession) currentState.homeScore + points else currentState.homeScore,
-                awayScore = if (!currentState.isHomePossession) currentState.awayScore + points else currentState.awayScore,
-                quarter = nextQuarter,
-                clockSeconds = nextClockSeconds,
-                isHomePossession = !currentState.isHomePossession
-            )
-        }
-
-        val yardsForFirstDown = currentState.distance
-        
-        val (newDown, newDistance) = if (result.yardsGained >= yardsForFirstDown) {
-            1 to 10
         } else {
-            val updatedDown = currentState.down + 1
-            if (updatedDown > 4) {
-                // Turnover on downs
-                return GameState(
-                    down = 1,
-                    distance = 10,
-                    yardLine = 100 - newYardLine,
-                    homeScore = currentState.homeScore,
-                    awayScore = currentState.awayScore,
-                    quarter = nextQuarter,
-                    clockSeconds = nextClockSeconds,
-                    isHomePossession = !currentState.isHomePossession
-                )
-            }
-            updatedDown to (yardsForFirstDown - result.yardsGained)
+            rolledOver
         }
-
-        return currentState.copy(
-            down = newDown,
-            distance = newDistance,
-            yardLine = newYardLine,
-            quarter = nextQuarter,
-            clockSeconds = nextClockSeconds
-        )
     }
 
-    fun resolveKickoff(currentState: GameState, result: KickResult): GameState {
-        val nextYardLine = if (result.isTouchback) 25 else result.endYardLine
-        
-        return GameState(
-            down = 1,
-            distance = 10,
-            yardLine = nextYardLine,
-            homeScore = currentState.homeScore,
-            awayScore = currentState.awayScore,
-            quarter = currentState.quarter,
-            clockSeconds = currentState.clockSeconds,
-            isHomePossession = !currentState.isHomePossession
-        )
-    }
-
-    fun resolvePunt(currentState: GameState, result: KickResult): GameState {
-        val nextYardLine = if (result.isTouchback) 20 else result.endYardLine
-        
-        return GameState(
-            down = 1,
-            distance = 10,
-            yardLine = nextYardLine,
-            homeScore = currentState.homeScore,
-            awayScore = currentState.awayScore,
-            quarter = currentState.quarter,
-            clockSeconds = currentState.clockSeconds,
-            isHomePossession = !currentState.isHomePossession
-        )
-    }
+    /** Inside the opponent's 10 the distance is "and goal". */
+    private fun firstDownDistance(yardLine: Int): Int = minOf(Rules.FIRST_DOWN_DISTANCE, Rules.FIELD_LENGTH_YDS - yardLine).coerceAtLeast(1)
 }

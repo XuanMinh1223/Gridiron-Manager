@@ -5,11 +5,11 @@ import com.xuan.gridironmanager.domain.sim.match.GameState
 import com.xuan.gridironmanager.domain.sim.movement.RunningPlayer
 
 data class MatchUiState(
-    val gameState: GameState = GameState(),
+    val gameState: GameState = GameState.openingKickoff(),
     val players: List<RunningPlayer> = emptyList(),
     val ballPosition: Vector3D? = null,
     val playByPlayText: String = "Ready for kick-off",
     val isPlayRunning: Boolean = false,
     val lineOfScrimmageY: Float? = null,
-    val firstDownMarkerY: Float? = null
+    val firstDownMarkerY: Float? = null,
 )

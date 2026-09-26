@@ -9,5 +9,5 @@ data class PlayResult(
     val isFieldGoal: Boolean = false,
     val isExtraPoint: Boolean = false,
     val isKickoff: Boolean = false,
-    val isPunt: Boolean = false
+    val isPunt: Boolean = false,
 )

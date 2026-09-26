@@ -1,5 +1,6 @@
 package com.xuan.gridironmanager.domain.sim.movement
 
+import com.xuan.gridironmanager.domain.model.Position
 import com.xuan.gridironmanager.domain.model.Route
 import com.xuan.gridironmanager.domain.model.Vector3D
 import com.xuan.gridironmanager.domain.model.VerticalReach
@@ -11,5 +12,9 @@ data class RunningPlayer(
     val route: Route?,
     val verticalReach: VerticalReach = VerticalReach(),
     var currentWaypointIndex: Int = 0,
-    val isOffense: Boolean = true
+    val isOffense: Boolean = true,
+    /** The role this player is lined up in for the current play. */
+    val position: Position? = null,
+    val kickPower: Int = 0,
+    val throwAccuracy: Int = 0,
 )

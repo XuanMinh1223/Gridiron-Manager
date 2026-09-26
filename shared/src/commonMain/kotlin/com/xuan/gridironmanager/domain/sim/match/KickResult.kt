@@ -5,5 +5,5 @@ data class KickResult(
     val description: String,
     val isTouchback: Boolean,
     val isOutOfBounds: Boolean,
-    val isTouchdown: Boolean = false
+    val isTouchdown: Boolean = false,
 )
