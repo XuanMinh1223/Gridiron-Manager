@@ -128,6 +128,63 @@ class MatchSimulationTest {
         }
 
     @Test
+    fun testSameSeedPlaysOutIdenticallyAtEverySpeed() =
+        testScope.runTest {
+            fun playSnaps(speed: SimSpeed): MatchUiState {
+                val presenter = presenter(seed = 9)
+                presenter.startMatch(matchup)
+                presenter.setSimSpeed(speed)
+                repeat(8) {
+                    presenter.snapBall()
+                    advanceUntilIdle()
+                }
+                return presenter.uiState.value
+            }
+
+            val realTime = playSnaps(SimSpeed.X1)
+            val fast = playSnaps(SimSpeed.X10)
+
+            assertEquals(realTime.gameState, fast.gameState)
+            assertEquals(realTime.playByPlayText, fast.playByPlayText)
+        }
+
+    @Test
+    fun testHigherSpeedPlaysBackFaster() =
+        testScope.runTest {
+            fun playbackMillis(speed: SimSpeed): Long {
+                val presenter = presenter()
+                presenter.startMatch(matchup)
+                presenter.setSimSpeed(speed)
+                val start = testScheduler.currentTime
+                presenter.snapBall()
+                advanceUntilIdle()
+                return testScheduler.currentTime - start
+            }
+
+            val realTime = playbackMillis(SimSpeed.X1)
+            val fast = playbackMillis(SimSpeed.X10)
+
+            // The opening kickoff hangs for several seconds
+            assertTrue(realTime > 3_000, "Real-time kickoff took ${realTime}ms")
+            assertTrue(fast in (realTime / 10 - 50)..(realTime / 10 + 50), "10x kickoff took ${fast}ms vs ${realTime}ms at 1x")
+        }
+
+    @Test
+    fun testQuickSimPlaysOutTheRestOfTheGame() =
+        testScope.runTest {
+            val presenter = presenter()
+            presenter.startMatch(matchup)
+
+            presenter.quickSim()
+            advanceUntilIdle()
+
+            val state = presenter.uiState.value
+            assertTrue(state.gameState.isGameOver)
+            assertFalse(state.isPlayRunning)
+            assertTrue(state.playByPlayText.startsWith("Quick sim complete"))
+        }
+
+    @Test
     fun testKickoffsOfferNoChoice() =
         testScope.runTest {
             val presenter = presenter()

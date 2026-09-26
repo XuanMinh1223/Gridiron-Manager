@@ -86,7 +86,7 @@ class MatchPresenter(
             val play = simulator.startPlay(snap)
             var outcome: PlayOutcome?
             do {
-                delay(TICK_MILLIS)
+                delay(TICK_MILLIS / _uiState.value.simSpeed.multiplier)
                 outcome = play.tick(MatchSimulator.TICK_DELTA_SEC)
                 _uiState.update {
                     it.copy(
@@ -108,6 +108,31 @@ class MatchPresenter(
                 )
             }
             preparePlayCalls()
+        }
+    }
+
+    override fun setSimSpeed(speed: SimSpeed) {
+        _uiState.update { it.copy(simSpeed = speed) }
+    }
+
+    override fun quickSim() {
+        val simulator = simulator ?: return
+        val current = _uiState.value
+        if (current.isPlayRunning || current.gameState.isGameOver) return
+
+        _uiState.update { it.copy(isPlayRunning = true, playByPlayText = "Simulating the rest of the game...", ballPosition = null) }
+        scope.launch(simDispatcher) {
+            val finalState = simulator.simulateRestOfGame(current.gameState)
+            _uiState.update {
+                it.copy(
+                    gameState = finalState,
+                    isPlayRunning = false,
+                    players = emptyList(),
+                    lineOfScrimmageY = null,
+                    firstDownMarkerY = null,
+                    playByPlayText = "Quick sim complete. Final score: ${finalState.homeScore}-${finalState.awayScore}.",
+                )
+            }
         }
     }
 
@@ -156,6 +181,6 @@ class MatchPresenter(
         }
 
     private companion object {
-        const val TICK_MILLIS = 50L // Real time: one simulation tick per 50 ms
+        const val TICK_MILLIS = 50L // At 1x, one 0.05 s simulation tick per 50 ms: real time
     }
 }

@@ -12,4 +12,9 @@ interface MatchActions {
     fun setAutoCall(enabled: Boolean)
 
     fun snapBall()
+
+    fun setSimSpeed(speed: SimSpeed)
+
+    /** Instantly plays out the rest of the game, with the CPU calling plays for both teams. */
+    fun quickSim()
 }

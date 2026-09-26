@@ -25,6 +25,7 @@ import com.xuan.gridironmanager.domain.sim.match.GamePhase
 import com.xuan.gridironmanager.domain.sim.match.GameState
 import com.xuan.gridironmanager.ui.match.components.FieldCanvas
 import com.xuan.gridironmanager.ui.match.components.PlayCallPanel
+import com.xuan.gridironmanager.ui.match.components.SimControls
 
 @Composable
 fun MatchScreen(
@@ -135,6 +136,14 @@ fun MatchScreen(
                     Text("Auto-call plays", modifier = Modifier.weight(1f))
                     Switch(checked = playCall.isAutoCall, onCheckedChange = actions::setAutoCall)
                 }
+
+                SimControls(
+                    speed = uiState.simSpeed,
+                    onSpeedSelected = actions::setSimSpeed,
+                    onQuickSim = actions::quickSim,
+                    isQuickSimEnabled = canSnap,
+                    modifier = Modifier.fillMaxWidth(),
+                )
 
                 Button(
                     onClick = actions::snapBall,

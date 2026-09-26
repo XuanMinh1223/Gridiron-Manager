@@ -16,6 +16,7 @@ data class MatchUiState(
     val lineOfScrimmageY: Float? = null,
     val firstDownMarkerY: Float? = null,
     val playCall: PlayCallState = PlayCallState(),
+    val simSpeed: SimSpeed = SimSpeed.X1,
 )
 
 /** The user's play-calling options for the next snap. */
