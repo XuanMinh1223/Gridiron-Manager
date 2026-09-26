@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.random.Random
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Owns the live match: play calling for the user's team (with the CPU calling for the opponent), the pre-snap
@@ -37,6 +38,7 @@ class MatchPresenter(
     val uiState: StateFlow<MatchUiState> = _uiState.asStateFlow()
 
     private var simulator: MatchSimulator? = null
+    private var currentMatchup: Matchup? = null
 
     // The CPU's calls for the next snap, for whichever sides it controls
     private var cpuOffense: OffensivePlay? = null
@@ -46,10 +48,20 @@ class MatchPresenter(
         matchup: Matchup,
         initialState: GameState = GameState.openingKickoff(),
     ) {
+        currentMatchup = matchup
         simulator = MatchSimulator(matchup, random)
         _uiState.update { it.copy(gameState = initialState, isMatchReady = true) }
         preparePlayCalls()
         showPreview()
+    }
+
+    override fun setDebugMode(enabled: Boolean) {
+        _uiState.update { it.copy(isDebugMode = enabled) }
+    }
+
+    override fun resetGame() {
+        val matchup = currentMatchup ?: return
+        startMatch(matchup)
     }
 
     override fun selectOffensivePlay(play: OffensivePlay) {
@@ -99,7 +111,7 @@ class MatchPresenter(
             val play = simulator.startPlay(snap)
             var outcome: PlayOutcome?
             do {
-                delay(scaledMillis(TICK_MILLIS))
+                delay(scaledMillis(TICK_MILLIS).milliseconds)
                 outcome = play.tick(MatchSimulator.TICK_DELTA_SEC)
                 val players = play.players.map { p -> p.copy() }
                 _uiState.update {
@@ -126,7 +138,7 @@ class MatchPresenter(
             preparePlayCalls()
 
             // Leave the final frame up for a moment before lining up for the next snap
-            delay(scaledMillis(RESULT_PAUSE_MILLIS))
+            delay(scaledMillis(RESULT_PAUSE_MILLIS).milliseconds)
             showPreview()
         }
     }

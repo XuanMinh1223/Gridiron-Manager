@@ -19,6 +19,7 @@ data class MatchUiState(
     val playCall: PlayCallState = PlayCallState(),
     val simSpeed: SimSpeed = SimSpeed.X1,
     val showAssignments: Boolean = true,
+    val isDebugMode: Boolean = false,
     val overlay: TacticalOverlay = TacticalOverlay.NONE,
 )
 

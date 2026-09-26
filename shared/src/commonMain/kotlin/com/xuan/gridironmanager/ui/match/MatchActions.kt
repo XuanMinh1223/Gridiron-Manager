@@ -15,6 +15,10 @@ interface MatchActions {
 
     fun setShowAssignments(enabled: Boolean)
 
+    fun setDebugMode(enabled: Boolean)
+
+    fun resetGame()
+
     fun setSimSpeed(speed: SimSpeed)
 
     /** Instantly plays out the rest of the game, with the CPU calling plays for both teams. */

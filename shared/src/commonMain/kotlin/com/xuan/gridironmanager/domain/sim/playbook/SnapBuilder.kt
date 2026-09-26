@@ -242,7 +242,7 @@ object SnapBuilder {
     private fun worldX(
         xOffset: Float,
         direction: Float,
-    ) = FieldGeometry.CENTER_X + xOffset * direction
+    ): Float = clampToField(FieldGeometry.CENTER_X + xOffset * direction)
 
     private fun worldSpot(
         spot: ZoneSpot,

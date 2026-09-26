@@ -13,6 +13,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -140,6 +141,25 @@ fun MatchScreen(
                     Spacer(modifier = Modifier.width(16.dp))
                     Text("Assignments", modifier = Modifier.weight(1f))
                     Switch(checked = uiState.showAssignments, onCheckedChange = actions::setShowAssignments)
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Debug Mode", modifier = Modifier.weight(1f))
+                    Switch(checked = uiState.isDebugMode, onCheckedChange = actions::setDebugMode)
+                }
+
+                if (uiState.isDebugMode) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = actions::resetGame,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Reset Game (Debug)")
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
 
                 SimControls(

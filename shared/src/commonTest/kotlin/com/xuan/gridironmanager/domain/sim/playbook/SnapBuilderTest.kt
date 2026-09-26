@@ -1,5 +1,6 @@
 package com.xuan.gridironmanager.domain.sim.playbook
 
+import com.xuan.gridironmanager.domain.model.PlayType
 import com.xuan.gridironmanager.domain.model.Position
 import com.xuan.gridironmanager.domain.sim.FieldGeometry
 import com.xuan.gridironmanager.domain.sim.match.GamePhase
@@ -136,5 +137,33 @@ class SnapBuilderTest {
         val snap = SnapBuilder.build(homeBall, matchup, Playbook.FIELD_GOAL, Playbook.COVER_2)
 
         assertNull(snap.offense.single { it.role == PlayerRole.KICKER }.route)
+    }
+
+    @Test
+    fun testExtremeFormationOffsetsAreClampedToField() {
+        val baseNodes = Playbook.INSIDE_ZONE.formation.nodes
+        val extremeNodes =
+            baseNodes.mapIndexed { index, node ->
+                if (index == 0) node.copy(xOffset = 100f) else node
+            }
+        val extremePlay =
+            OffensivePlay(
+                id = "extreme",
+                name = "Extreme",
+                category = PlayCategory.RUN,
+                type = PlayType.RUN,
+                formation =
+                    Formation(
+                        name = "Extreme",
+                        type = FormationType.OFFENSE,
+                        nodes = extremeNodes,
+                    ),
+                ballCarrierSlot = "RB",
+                routes = mapOf("RB" to Routes.INSIDE_ZONE),
+            )
+        val snap = SnapBuilder.build(homeBall, matchup, extremePlay, Playbook.COVER_2)
+        val player = snap.offense.first { it.slot == baseNodes[0].slot }
+        assertTrue(player.currentPos.x >= 1f)
+        assertTrue(player.currentPos.x <= FieldGeometry.WIDTH_YDS - 1f)
     }
 }
