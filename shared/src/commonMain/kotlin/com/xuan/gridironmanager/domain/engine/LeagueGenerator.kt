@@ -36,6 +36,27 @@ object LeagueGenerator {
         return roster
     }
 
+    /** Rating ranges for the physical attributes that separate positions. */
+    private data class Physique(
+        val speed: IntRange,
+        val strength: IntRange,
+    )
+
+    private fun physiqueFor(position: Position): Physique =
+        when (position) {
+            Position.QB -> Physique(speed = 55..85, strength = 50..75)
+            Position.RB -> Physique(speed = 80..97, strength = 65..90)
+            Position.WR -> Physique(speed = 82..99, strength = 50..75)
+            Position.TE -> Physique(speed = 68..86, strength = 70..90)
+            Position.OT, Position.OG, Position.C, Position.OL -> Physique(speed = 45..70, strength = 80..99)
+            Position.EDGE -> Physique(speed = 70..88, strength = 72..92)
+            Position.DT, Position.DL -> Physique(speed = 55..75, strength = 80..99)
+            Position.LB -> Physique(speed = 72..90, strength = 70..90)
+            Position.CB -> Physique(speed = 82..99, strength = 45..70)
+            Position.S -> Physique(speed = 80..95, strength = 55..80)
+            Position.K, Position.P -> Physique(speed = 40..65, strength = 30..55)
+        }
+
     private fun generatePlayer(
         id: String,
         teamId: String,
@@ -48,12 +69,13 @@ object LeagueGenerator {
         ): Int = random.nextInt(min, max + 1)
 
         val isKicker = position == Position.K || position == Position.P
+        val physique = physiqueFor(position)
 
         val attributes =
             PlayerAttributes(
-                speed = rating(),
-                acceleration = rating(),
-                strength = rating(),
+                speed = rating(physique.speed.first, physique.speed.last),
+                acceleration = rating(physique.speed.first, physique.speed.last),
+                strength = rating(physique.strength.first, physique.strength.last),
                 verticalJump = rating(),
                 awareness = rating(),
                 playRecognition = rating(),

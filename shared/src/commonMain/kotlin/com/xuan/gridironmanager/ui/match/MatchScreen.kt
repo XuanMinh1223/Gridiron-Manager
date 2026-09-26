@@ -12,6 +12,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -20,15 +21,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.xuan.gridironmanager.domain.sim.match.GamePhase
 import com.xuan.gridironmanager.domain.sim.match.GameState
 import com.xuan.gridironmanager.ui.match.components.FieldCanvas
+import com.xuan.gridironmanager.ui.match.components.PlayCallPanel
 
 @Composable
 fun MatchScreen(
     uiState: MatchUiState,
     homeTeamName: String,
     awayTeamName: String,
-    onSnapClicked: () -> Unit,
+    actions: MatchActions,
     onBackClicked: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -112,9 +115,30 @@ fun MatchScreen(
                     modifier = Modifier.padding(bottom = 16.dp),
                 )
 
+                val canSnap = uiState.isMatchReady && !uiState.isPlayRunning && !gameState.isGameOver
+                val playCall = uiState.playCall
+
+                if (playCall.isUserChoosing && !gameState.isGameOver) {
+                    PlayCallPanel(
+                        playCall = playCall,
+                        actions = actions,
+                        enabled = canSnap,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Auto-call plays", modifier = Modifier.weight(1f))
+                    Switch(checked = playCall.isAutoCall, onCheckedChange = actions::setAutoCall)
+                }
+
                 Button(
-                    onClick = onSnapClicked,
-                    enabled = !uiState.isPlayRunning && !gameState.isGameOver,
+                    onClick = actions::snapBall,
+                    enabled = canSnap,
                     modifier = Modifier.fillMaxWidth().height(56.dp),
                 ) {
                     Text(if (gameState.isGameOver) "GAME OVER" else "SNAP BALL", fontSize = 18.sp, fontWeight = FontWeight.Bold)
@@ -132,6 +156,7 @@ private fun teamLabel(
 private fun situationText(gameState: GameState): String =
     when {
         gameState.isGameOver -> ""
-        gameState.isKickoffPending -> "Kickoff from the ${gameState.yardLine}"
+        gameState.phase == GamePhase.KICKOFF -> "Kickoff from the ${gameState.yardLine}"
+        gameState.phase == GamePhase.EXTRA_POINT -> "Extra point try"
         else -> "${gameState.down} & ${gameState.distance} at YD ${gameState.yardLine}"
     }

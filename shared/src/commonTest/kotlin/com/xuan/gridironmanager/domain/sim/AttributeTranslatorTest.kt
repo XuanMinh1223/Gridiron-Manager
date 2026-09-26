@@ -2,6 +2,7 @@ package com.xuan.gridironmanager.domain.sim
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class AttributeTranslatorTest {
     @Test
@@ -31,5 +32,28 @@ class AttributeTranslatorTest {
         // At 40 yards, radius should double
         assertEquals(1.0f, AttributeTranslator.calculatePassAccuracyRadius(99, 40f), 0.001f)
         assertEquals(6.0f, AttributeTranslator.calculatePassAccuracyRadius(0, 40f), 0.001f)
+    }
+
+    @Test
+    fun testFieldGoalRangeGrowsWithKickPower() {
+        assertEquals(40, AttributeTranslator.calculateFieldGoalRangeYards(0))
+        assertEquals(65, AttributeTranslator.calculateFieldGoalRangeYards(99))
+    }
+
+    @Test
+    fun testFieldGoalMakeChance() {
+        // Beyond range is impossible
+        assertEquals(0f, AttributeTranslator.calculateFieldGoalMakeChance(distanceYds = 50, kickPower = 0, kickAccuracy = 99))
+
+        val chipShot = AttributeTranslator.calculateFieldGoalMakeChance(distanceYds = 25, kickPower = 90, kickAccuracy = 90)
+        val longKick = AttributeTranslator.calculateFieldGoalMakeChance(distanceYds = 55, kickPower = 90, kickAccuracy = 90)
+        assertTrue(chipShot > 0.95f, "Chip shot chance was $chipShot")
+        assertTrue(longKick in 0.5f..0.8f, "55-yard chance was $longKick")
+
+        // Accuracy scales the whole curve
+        assertTrue(
+            AttributeTranslator.calculateFieldGoalMakeChance(40, 90, kickAccuracy = 99) >
+                AttributeTranslator.calculateFieldGoalMakeChance(40, 90, kickAccuracy = 40),
+        )
     }
 }

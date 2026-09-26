@@ -2,6 +2,7 @@ package com.xuan.gridironmanager.domain.sim
 
 object AttributeTranslator {
     private const val INCH_TO_YARD = 0.0277778f
+    private const val CHIP_SHOT_YDS = 20
 
     /**
      * Maps speed rating (0-99) to yards per second.
@@ -66,4 +67,31 @@ object AttributeTranslator {
      * Helper to get standing height in yards.
      */
     fun calculateStandingHeightYards(heightInches: Int): Float = heightInches * INCH_TO_YARD
+
+    /**
+     * Longest field goal a kicker can make, in yards.
+     * 99 = 65 yards
+     * 0 = 40 yards
+     */
+    fun calculateFieldGoalRangeYards(kickPower: Int): Int {
+        val rating = kickPower.coerceIn(0, 99).toFloat()
+        return (40.0f + (rating / 99.0f) * 25.0f).toInt()
+    }
+
+    /**
+     * Chance (0..1) of making a field goal from [distanceYds].
+     * Chip shots are near-automatic, falling off towards the edge of the kicker's range; accuracy scales the whole curve.
+     */
+    fun calculateFieldGoalMakeChance(
+        distanceYds: Int,
+        kickPower: Int,
+        kickAccuracy: Int,
+    ): Float {
+        val range = calculateFieldGoalRangeYards(kickPower)
+        if (distanceYds > range) return 0f
+
+        val difficulty = ((distanceYds - CHIP_SHOT_YDS).toFloat() / (range - CHIP_SHOT_YDS)).coerceIn(0f, 1f)
+        val accuracy = kickAccuracy.coerceIn(0, 99) / 99.0f
+        return (0.99f - 0.38f * difficulty * difficulty) * (0.9f + 0.1f * accuracy)
+    }
 }

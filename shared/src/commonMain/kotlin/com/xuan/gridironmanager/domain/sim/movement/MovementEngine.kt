@@ -7,6 +7,7 @@ import kotlin.math.sqrt
 object MovementEngine {
     private const val WAYPOINT_ARRIVAL_RADIUS = 0.2f
     private const val PREDICTION_STEP_SEC = 0.05f
+    private const val MAX_LEAD_SEC = 1.5f
 
     fun updatePositions(
         players: List<RunningPlayer>,
@@ -35,6 +36,21 @@ object MovementEngine {
                 y = player.currentPos.y + dy / distance * moveDistance,
                 z = player.currentPos.z,
             )
+    }
+
+    /**
+     * Moves [player] along a pursuit angle: towards where a target at [targetPos], moving at [targetVelocity]
+     * (yards per second), will be by the time [player] can get there.
+     */
+    fun intercept(
+        player: RunningPlayer,
+        targetPos: Vector3D,
+        targetVelocity: Vector3D,
+        tickDeltaSec: Float,
+    ) {
+        val leadSec = if (player.speedYdsPerSec > 0f) min(player.currentPos.distance2DTo(targetPos) / player.speedYdsPerSec, MAX_LEAD_SEC) else 0f
+        val aim = targetPos.copy(x = targetPos.x + targetVelocity.x * leadSec, y = targetPos.y + targetVelocity.y * leadSec)
+        pursue(player, aim, tickDeltaSec)
     }
 
     /** Where [player] will be after [secondsAhead] if they keep running their route. Does not move [player]. */

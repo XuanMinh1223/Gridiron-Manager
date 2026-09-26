@@ -55,7 +55,7 @@ fun App() {
                     uiState = matchUiState,
                     homeTeamName = matchup?.homeTeam?.abbreviation ?: "HOME",
                     awayTeamName = matchup?.awayTeam?.abbreviation ?: "AWAY",
-                    onSnapClicked = { viewModel.startVisualPlay() },
+                    actions = viewModel.matchActions,
                     onBackClicked = { currentScreen = Screen.DASHBOARD },
                 )
             }

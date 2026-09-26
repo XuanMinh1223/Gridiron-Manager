@@ -27,7 +27,6 @@ fun Player.toRunningPlayer(route: Route? = null): RunningPlayer {
                 verticalLeapYards = maxCatchHeightYards - standingHeightYards,
             ),
         position = Position.entries.find { it.abbreviation == position },
-        kickPower = attributes.kickPower,
-        throwAccuracy = attributes.throwAccuracy,
+        attributes = attributes,
     )
 }
