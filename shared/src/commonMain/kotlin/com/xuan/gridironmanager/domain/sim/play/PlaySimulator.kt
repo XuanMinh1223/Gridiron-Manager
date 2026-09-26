@@ -15,6 +15,8 @@ import com.xuan.gridironmanager.domain.sim.match.Rules
 import com.xuan.gridironmanager.domain.sim.movement.MovementEngine
 import com.xuan.gridironmanager.domain.sim.movement.PlayerRole
 import com.xuan.gridironmanager.domain.sim.movement.RunningPlayer
+import com.xuan.gridironmanager.domain.sim.vision.GazeState
+import com.xuan.gridironmanager.domain.sim.vision.VisionEngine
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
@@ -45,6 +47,7 @@ class PlaySimulator(
     private val direction = if (snap.isAttackingUp) 1f else -1f
     private val losWorldY = snap.losWorldY
     private val playersById = players.associateBy { it.id }
+    private val gazeById = players.associate { it.id to initialGaze(it) }.toMutableMap()
 
     private val passer = if (playType == PlayType.PASS) offense.find { it.role == PlayerRole.PASSER } else null
     private val qbBrain = passer?.let { QbBrain(it, snap.progression.mapNotNull { id -> playersById[id] }) }
@@ -60,6 +63,7 @@ class PlaySimulator(
     private var targetReceiver: RunningPlayer? = null
     private var fieldGoalResult: FieldGoalResult? = null
     private var carrierVelocity = Vector3D(0f, 0f, 0f)
+    private val defenderTracking = mutableMapOf<String, DefenderTrackingState>()
 
     // Elusiveness: tacklers who missed and are still recovering, and the moves that beat them
     private val recoveringUntilSec = mutableMapOf<String, Float>()
@@ -92,6 +96,7 @@ class PlaySimulator(
             }
         }
         moveDefense(tickDeltaSec)
+        updateGazes(tickDeltaSec)
 
         val outcome =
             when (playType) {
@@ -149,7 +154,7 @@ class PlaySimulator(
         // After the throw, nearby defenders break on the ball
         val throwTarget = ballTrajectory?.takeIf { playType == PlayType.PASS }?.targetPos
         if (throwTarget != null &&
-            elapsedSec - throwTimeSec >= BALL_REACTION_SEC &&
+            canBreakOnBall(defender) &&
             defender.currentPos.distance2DTo(throwTarget) <= BALL_BREAK_RADIUS_YDS
         ) {
             return throwTarget
@@ -393,6 +398,7 @@ class PlaySimulator(
                 ballTrajectory = withThrowError(throwCommand.trajectory, qb.attributes.throwAccuracy)
                 throwTimeSec = elapsedSec
                 targetReceiver = playersById[throwCommand.targetId]
+                initializeDefenderTracking(qb, targetReceiver)
             }
 
             if (brain.state == QbState.SACKED) {
@@ -453,6 +459,139 @@ class PlaySimulator(
         ballCarrier = receiver
         return null
     }
+
+    private fun updateGazes(tickDeltaSec: Float) {
+        val qb = passer
+        if (qb != null) {
+            val qbGaze = gazeById[qb.id]
+            val target = qbBrain?.gazeTargetId?.let(playersById::get)
+            qbGaze?.targetId = target?.id
+            target?.let { qbGaze?.turnToward(relativeVector(qb.currentPos, it.currentPos), QB_TURN_RATE_DEG_PER_SEC, tickDeltaSec) }
+        }
+        for (defender in defense) {
+            val gaze = gazeById[defender.id] ?: continue
+            val target =
+                when (defender.role) {
+                    PlayerRole.MAN_COVERAGE -> defender.coverageTargetId?.let(playersById::get)
+                    PlayerRole.ZONE_COVERAGE -> passer
+                    else -> null
+                }
+            gaze.targetId = target?.id
+            target?.let { gaze.turnToward(relativeVector(defender.currentPos, it.currentPos), DB_TURN_RATE_DEG_PER_SEC, tickDeltaSec) }
+        }
+    }
+
+    private fun initializeDefenderTracking(
+        qb: RunningPlayer,
+        receiver: RunningPlayer?,
+    ) {
+        if (receiver == null) return
+        val blockers = players.map { it.id to it.currentPos }
+        for (defender in defense.filter { it.role == PlayerRole.MAN_COVERAGE || it.role == PlayerRole.ZONE_COVERAGE }) {
+            val gaze = gazeById[defender.id] ?: continue
+            val receiverVisible =
+                VisionEngine
+                    .inspect(
+                        defender.currentPos,
+                        gaze.facing,
+                        receiver.currentPos,
+                        DB_FOV_DEGREES,
+                        blockers,
+                        defender.id,
+                        receiver.id,
+                    ).visible
+            val qbVisible =
+                VisionEngine
+                    .inspect(
+                        defender.currentPos,
+                        gaze.facing,
+                        qb.currentPos,
+                        DB_FOV_DEGREES,
+                        blockers,
+                        defender.id,
+                        qb.id,
+                    ).visible
+            val ballVisible =
+                ballTrajectory?.let {
+                    VisionEngine
+                        .inspect(
+                            defender.currentPos,
+                            gaze.facing,
+                            it.startPos,
+                            DB_FOV_DEGREES,
+                            blockers,
+                            defender.id,
+                        ).visible
+                } == true
+            val awareness = defender.attributes.awareness.coerceIn(0, 100)
+            val receiverInference = receiverVisible && random.nextFloat() < awarenessProbability(awareness)
+            val qbInference = qbVisible && random.nextFloat() < awarenessProbability(awareness)
+            if (receiverInference || qbInference || ballVisible) {
+                val recognitionDelay = if (ballVisible) 0f else recognitionDelaySec(awareness)
+                defenderTracking[defender.id] =
+                    DefenderTrackingState(
+                        recognitionTimeSec = elapsedSec + recognitionDelay,
+                        ballReactionTimeSec = elapsedSec + recognitionDelay + ballTurnDelaySec(awareness),
+                        hasLocatedBall = ballVisible,
+                    )
+            }
+        }
+    }
+
+    private fun canBreakOnBall(defender: RunningPlayer): Boolean {
+        var tracking = defenderTracking[defender.id]
+        if (tracking == null && ballPosition != null) {
+            val gaze = gazeById[defender.id]
+            val seesBall =
+                gaze?.let {
+                    VisionEngine
+                        .inspect(
+                            defender.currentPos,
+                            it.facing,
+                            ballPosition!!,
+                            DB_FOV_DEGREES,
+                            players.map { player -> player.id to player.currentPos },
+                            defender.id,
+                        ).visible
+                } == true
+            if (seesBall) {
+                val awareness = defender.attributes.awareness.coerceIn(0, 100)
+                tracking = DefenderTrackingState(elapsedSec, elapsedSec + ballTurnDelaySec(awareness), true)
+                defenderTracking[defender.id] = tracking
+            }
+        }
+        tracking ?: return false
+        if (!tracking.hasLocatedBall && elapsedSec >= tracking.ballReactionTimeSec) tracking.hasLocatedBall = true
+        return tracking.hasLocatedBall && elapsedSec >= tracking.ballReactionTimeSec
+    }
+
+    private fun initialGaze(player: RunningPlayer): GazeState {
+        val target =
+            when (player.role) {
+                PlayerRole.MAN_COVERAGE -> player.coverageTargetId?.let(playersById::get)?.currentPos
+                PlayerRole.ZONE_COVERAGE -> player.zoneLandmark
+                else -> null
+            }
+        val facing = target?.let { relativeVector(player.currentPos, it) } ?: Vector3D(0f, direction, 0f)
+        return GazeState(facing, target?.let { playersById.entries.firstOrNull { entry -> entry.value.currentPos == it }?.key })
+    }
+
+    private fun relativeVector(
+        from: Vector3D,
+        to: Vector3D,
+    ) = Vector3D(to.x - from.x, to.y - from.y, 0f)
+
+    private fun awarenessProbability(awareness: Int) = (0.25f + awareness / 150f).coerceIn(0.25f, 0.92f)
+
+    private fun recognitionDelaySec(awareness: Int) = 0.35f - awareness / 400f
+
+    private fun ballTurnDelaySec(awareness: Int) = 0.35f - awareness / 500f
+
+    private data class DefenderTrackingState(
+        val recognitionTimeSec: Float,
+        val ballReactionTimeSec: Float,
+        var hasLocatedBall: Boolean,
+    )
 
     private fun interception(ball: Vector3D) =
         PlayOutcome.Scrimmage(PlayResult(yardsFromLos(ball.y), "INTERCEPTED!", isTouchdown = false, isTurnover = true, clockStops = true))
@@ -539,7 +678,9 @@ class PlaySimulator(
         private const val DEEP_ZONE_HALF_WIDTH_YDS = 12f
         private const val DEEP_ZONE_SHADE = 0.6f
         private const val DEEP_CUSHION_YDS = 3f
-        private const val BALL_REACTION_SEC = 0.3f
+        private const val DB_FOV_DEGREES = 180f
+        private const val QB_TURN_RATE_DEG_PER_SEC = 360f
+        private const val DB_TURN_RATE_DEG_PER_SEC = 540f
         private const val BALL_BREAK_RADIUS_YDS = 15f
         private const val FUMBLE_CHANCE = 0.012f
         private const val STRIP_SACK_CHANCE = 0.1f

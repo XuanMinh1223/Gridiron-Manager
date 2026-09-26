@@ -55,6 +55,20 @@ class MatchEngineIntegrationTest {
     }
 
     @Test
+    fun testQbGazeFollowsCurrentProgression() {
+        val qb = RunningPlayer("QB", Vector3D(0f, 45f, 0f), 0f, null)
+        val first = RunningPlayer("WR1", Vector3D(-15f, 50f, 0f), 8f, null)
+        val second = RunningPlayer("WR2", Vector3D(15f, 50f, 0f), 8f, null)
+        val defender = RunningPlayer("DB", Vector3D(-15f, 50f, 0f), 8f, null, isOffense = false)
+        val qbBrain = QbBrain(qb, listOf(first, second))
+
+        repeat(13) { qbBrain.evaluateTick(listOf(defender), tick) }
+
+        assertEquals(QbState.READING_PROGRESSIONS, qbBrain.state)
+        assertEquals("WR1", qbBrain.gazeTargetId)
+    }
+
+    @Test
     fun testQbLeadsReceiverAlongRoute() {
         val qb = RunningPlayer("QB", Vector3D(0f, 45f, 0f), 0f, null)
         val wr = RunningPlayer("WR", Vector3D(-15f, 50f, 0f), 8f, Route("Go", listOf(Waypoint(-15f, 100f))))

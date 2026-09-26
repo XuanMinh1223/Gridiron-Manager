@@ -34,6 +34,10 @@ class QbBrain(
 ) {
     private var elapsedSec = 0f
 
+    /** The progression currently in the QB's visual read, if any. */
+    var gazeTargetId: String? = null
+        private set
+
     fun evaluateTick(
         defenders: List<RunningPlayer>,
         tickDeltaSec: Float,
@@ -49,16 +53,19 @@ class QbBrain(
 
         if (elapsedSec < dropbackSec) {
             state = QbState.DROPPING_BACK
+            gazeTargetId = null
             return null
         }
         state = QbState.READING_PROGRESSIONS
+
+        val readsSoFar = 1 + ((elapsedSec - dropbackSec) / READ_TIME_SEC).toInt()
+        gazeTargetId = progressions.getOrNull((readsSoFar - 1).coerceAtMost(progressions.lastIndex))?.id
 
         val reads = progressions.map { receiver -> planThrow(receiver).let { Read(receiver, it, separationAtCatch(it, defenders)) } }
         val isPressured = defenders.any { qb.currentPos.distance2DTo(it.currentPos) <= PRESSURE_RADIUS_YDS }
         val isOutOfTime = elapsedSec >= forceThrowSec || isPressured
 
         // One read at a time: the QB gets to the next receiver every READ_TIME_SEC, so the checkdown comes last
-        val readsSoFar = 1 + ((elapsedSec - dropbackSec) / READ_TIME_SEC).toInt()
         val openRead = reads.take(readsSoFar).firstOrNull { it.separationYds >= requiredSeparation() }
         val read = openRead ?: (if (isOutOfTime) reads.maxByOrNull { it.separationYds } else null) ?: return null
 
