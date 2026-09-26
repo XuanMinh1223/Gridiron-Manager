@@ -1,18 +1,18 @@
 package com.xuan.gridironmanager.ui.match
 
+import com.xuan.gridironmanager.domain.model.Matchup
 import com.xuan.gridironmanager.domain.model.PlayType
-import com.xuan.gridironmanager.domain.model.Vector3D
-import com.xuan.gridironmanager.domain.sim.AttributeTranslator
-import com.xuan.gridironmanager.domain.sim.BallTrajectory
-import com.xuan.gridironmanager.domain.sim.PassEvaluator
-import com.xuan.gridironmanager.domain.sim.ai.QbBrain
-import com.xuan.gridironmanager.domain.sim.ai.QbState
-import com.xuan.gridironmanager.domain.sim.match.DriveEngine
+import com.xuan.gridironmanager.domain.sim.MatchSimulator
+import com.xuan.gridironmanager.domain.sim.match.GamePhase
 import com.xuan.gridironmanager.domain.sim.match.GameState
-import com.xuan.gridironmanager.domain.sim.match.KickResult
-import com.xuan.gridironmanager.domain.sim.match.PlayResult
-import com.xuan.gridironmanager.domain.sim.movement.MovementEngine
+import com.xuan.gridironmanager.domain.sim.match.PlayOutcome
 import com.xuan.gridironmanager.domain.sim.movement.RunningPlayer
+import com.xuan.gridironmanager.domain.sim.play.Snap
+import com.xuan.gridironmanager.domain.sim.playbook.DefensiveCall
+import com.xuan.gridironmanager.domain.sim.playbook.OffensivePlay
+import com.xuan.gridironmanager.domain.sim.playbook.Playbook
+import com.xuan.gridironmanager.ui.match.overlay.TacticalOverlay
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -21,299 +21,244 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.random.Random
+import kotlin.time.Duration.Companion.milliseconds
 
+/**
+ * Owns the live match: play calling for the user's team (with the CPU calling for the opponent), the pre-snap
+ * preview, and playing each snap out in real time through [MatchSimulator].
+ */
 class MatchPresenter(
-    private val driveEngine: DriveEngine,
     private val scope: CoroutineScope,
-    private val ioDispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.Default
-) {
+    private val simDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val random: Random = Random.Default,
+    private val userIsHome: Boolean = true,
+) : MatchActions {
     private val _uiState = MutableStateFlow(MatchUiState())
     val uiState: StateFlow<MatchUiState> = _uiState.asStateFlow()
 
-    private var activeTrajectory: BallTrajectory? = null
-    private var elapsedPlayTimeSec = 0f
-    private var passStartTimeSec = 0f
-    private var targetReceiverId: String? = null
+    private var simulator: MatchSimulator? = null
+    private var currentMatchup: Matchup? = null
 
-    fun updateGameState(gameState: GameState) {
-        _uiState.update { it.copy(gameState = gameState) }
+    // The CPU's calls for the next snap, for whichever sides it controls
+    private var cpuOffense: OffensivePlay? = null
+    private var cpuDefense: DefensiveCall? = null
+
+    fun startMatch(
+        matchup: Matchup,
+        initialState: GameState = GameState.openingKickoff(),
+    ) {
+        currentMatchup = matchup
+        simulator = MatchSimulator(matchup, random)
+        _uiState.update { it.copy(gameState = initialState, isMatchReady = true) }
+        preparePlayCalls()
+        showPreview()
     }
 
-    fun snapBall(
-        offense: List<RunningPlayer>,
-        defense: List<RunningPlayer>,
-        playType: PlayType = PlayType.PASS,
-        isAttackingUp: Boolean = true,
-        onPlayResolved: (GameState, PlayResult) -> Unit = { _, _ -> }
-    ) {
+    override fun setDebugMode(enabled: Boolean) {
+        _uiState.update { it.copy(isDebugMode = enabled) }
+    }
+
+    override fun resetGame() {
+        val matchup = currentMatchup ?: return
+        startMatch(matchup)
+    }
+
+    override fun selectOffensivePlay(play: OffensivePlay) {
+        _uiState.update { it.copy(playCall = it.playCall.copy(selectedOffense = play)) }
+        showPreview()
+    }
+
+    override fun selectDefensiveCall(call: DefensiveCall) {
+        _uiState.update { it.copy(playCall = it.playCall.copy(selectedDefense = call)) }
+        showPreview()
+    }
+
+    override fun setAutoCall(enabled: Boolean) {
+        _uiState.update { it.copy(playCall = it.playCall.copy(isAutoCall = enabled)) }
+        showPreview()
+    }
+
+    override fun setShowAssignments(enabled: Boolean) {
+        _uiState.update { it.copy(showAssignments = enabled) }
         if (_uiState.value.isPlayRunning) return
+        showPreview()
+    }
 
-        val gameState = _uiState.value.gameState
-        val initialWorldY = if (isAttackingUp) gameState.yardLine.toFloat() else (100 - gameState.yardLine).toFloat()
-        val distance = gameState.distance
-        val directionMultiplier = if (isAttackingUp) 1f else -1f
-        
-        _uiState.update { 
-            it.copy(
-                isPlayRunning = true, 
-                playByPlayText = if (playType == PlayType.RUN) "Hand-off!" else if (playType == PlayType.KICK || playType == PlayType.PUNT) "Ready for the kick!" else "Ball is snapped!",
-                lineOfScrimmageY = initialWorldY,
-                firstDownMarkerY = initialWorldY + (distance * directionMultiplier)
+    override fun setSimSpeed(speed: SimSpeed) {
+        _uiState.update { it.copy(simSpeed = speed) }
+    }
+
+    override fun snapBall() {
+        val simulator = simulator ?: return
+        val current = _uiState.value
+        if (current.isPlayRunning || current.gameState.isGameOver) return
+
+        val state = current.gameState
+        val offensivePlay = offensiveCallForSnap(current.playCall) ?: return
+        val defensiveCall = defensiveCallForSnap(current.playCall) ?: return
+        val snap = simulator.lineUp(state, offensivePlay, defensiveCall)
+
+        _uiState.update {
+            it.withLineup(snap, state).copy(
+                isPlayRunning = true,
+                playByPlayText = snapText(snap.playType),
+                overlay = liveOverlay(snap.offense + snap.defense, snap.losWorldY),
             )
         }
 
-        elapsedPlayTimeSec = 0f
-        passStartTimeSec = 0f
-        activeTrajectory = null
-
-        scope.launch(ioDispatcher) {
-            val players = offense + defense
-            var playResult: PlayResult? = null
-            var kickResult: KickResult? = null
-            val tickDelta = 0.05f // 20Hz
-            val maxPlayDurationSec = 15f // Safety timeout
-
-            // 2. QB Logic Setup (only for PASS)
-            val qb = if (playType == PlayType.PASS) offense.find { it.id.startsWith("QB_") } else null
-            val qbBrain = if (qb != null) QbBrain(qb, offense.filter { it != qb }) else null
-
-            // Special Teams Phase: FLIGHT -> LANDED
-            var isKickFlight = (playType == PlayType.KICK || playType == PlayType.PUNT)
-
-            if (isKickFlight) {
-                val kicker = offense.find { it.id.startsWith("K_") || it.id.startsWith("P_") } ?: offense.first()
-                val kickPower = 80 // Mock or from player attributes
-                val dist = AttributeTranslator.calculateKickDistanceYards(kickPower)
-                val hangtime = AttributeTranslator.calculateHangtimeSec(kickPower)
-                
-                val targetY = if (isAttackingUp) initialWorldY + dist else initialWorldY - dist
-                
-                activeTrajectory = BallTrajectory(
-                    startPos = kicker.currentPos,
-                    targetPos = Vector3D(kicker.currentPos.x, targetY, 0f),
-                    totalFlightTimeSec = hangtime,
-                    apexHeightYards = 30f
-                )
-                passStartTimeSec = elapsedPlayTimeSec
-            }
-
-            while (playResult == null && kickResult == null && elapsedPlayTimeSec < maxPlayDurationSec) {
-                delay(50)
-                elapsedPlayTimeSec += tickDelta
-                
-                // Deduct clock in real-time
-                _uiState.update { state ->
-                    state.copy(
-                        gameState = state.gameState.copy(
-                            clockSeconds = (state.gameState.clockSeconds - 1).coerceAtLeast(0)
-                        )
-                    )
-                }
-
-                // 1. Update positions
-                MovementEngine.updatePositions(players, tickDelta)
-
-                var currentBallPos: Vector3D? = null
-
-                if (isKickFlight) {
-                    activeTrajectory?.let { trajectory ->
-                        val elapsedSinceKick = elapsedPlayTimeSec - passStartTimeSec
-                        currentBallPos = trajectory.getPositionAt(elapsedSinceKick)
-                        
-                        if (elapsedSinceKick >= trajectory.totalFlightTimeSec) {
-                            isKickFlight = false
-                            // Check landing spot
-                            val ballPosAtLanding = currentBallPos
-                            
-                            // Yard line from kicker's perspective (0-100)
-                            val kickerYardLine = if (isAttackingUp) ballPosAtLanding.y else 100 - ballPosAtLanding.y
-                            
-                            // Yard line for the receiving team (distance from their own goal)
-                            val receiverYardLine = (100 - kickerYardLine).toInt()
-
-                            if (kickerYardLine >= 100 || kickerYardLine <= 0) {
-                                // Touchback
-                                kickResult = KickResult(
-                                    endYardLine = if (playType == PlayType.KICK) 25 else 20,
-                                    description = "Touchback.",
-                                    isTouchback = true,
-                                    isOutOfBounds = false
-                                )
-                            } else if (ballPosAtLanding.x < 0 || ballPosAtLanding.x > 53.3f) {
-                                // Out of bounds
-                                kickResult = KickResult(
-                                    endYardLine = if (playType == PlayType.KICK) 40 else receiverYardLine,
-                                    description = "Kick out of bounds.",
-                                    isTouchback = false,
-                                    isOutOfBounds = true
-                                )
-                            } else {
-                                // Caught/Landed in bounds -> Resolve immediately for prototype stability
-                                val returnYards = 15 // Simplified return
-                                val endYardLine = (receiverYardLine + returnYards).coerceAtMost(100)
-
-                                kickResult = KickResult(
-                                    endYardLine = endYardLine,
-                                    description = "Kick caught and returned to the $endYardLine.",
-                                    isTouchback = false,
-                                    isOutOfBounds = false
-                                )
-                            }
-                        }
-                    }
-                } else if (playType == PlayType.RUN) {
-                    val rb = offense.find { it.id.startsWith("RB_") }
-                    rb?.let { runner ->
-                        currentBallPos = runner.currentPos
-                        // Simple Run Logic: Advance until tackled
-                        for (defender in defense) {
-                            if (runner.currentPos.distance2DTo(defender.currentPos) < 1.2f) {
-                                val currentY = runner.currentPos.y
-                                val yardsGained = if (isAttackingUp) {
-                                    (currentY - initialWorldY).toInt()
-                                } else {
-                                    (initialWorldY - currentY).toInt()
-                                }
-                                
-                                val totalYardLine = gameState.yardLine + yardsGained
-                                playResult = PlayResult(
-                                    yardsGained = yardsGained,
-                                    description = if (totalYardLine >= 100) "TOUCHDOWN!" else "Run for $yardsGained yards.",
-                                    isTouchdown = totalYardLine >= 100,
-                                    isTurnover = false
-                                )
-                                break
-                            }
-                        }
-                    }
-                } else if (playType == PlayType.PASS) {
-                    // 2. QB Logic (Pass)
-                    if (qbBrain != null && qbBrain.state != QbState.THROWING && activeTrajectory == null) {
-                        val throwCmd = qbBrain.evaluateTick(defense, PassEvaluator)
-                        if (throwCmd != null) {
-                            val receiver = offense.find { it.id == throwCmd.targetId }
-                            if (receiver != null) {
-                                // LEAD PASSING: Target where receiver will be in flightTime
-                                val currentDist = qb!!.currentPos.distance2DTo(receiver.currentPos)
-                                val estimatedFlightTime = currentDist / 20f
-                                
-                                // Simple lead: assume receiver keeps moving on their route
-                                val leadPos = receiver.currentPos.copy(
-                                    y = receiver.currentPos.y + (directionMultiplier * receiver.speedYdsPerSec * estimatedFlightTime)
-                                )
-                                
-                                activeTrajectory = BallTrajectory(
-                                    startPos = qb.currentPos,
-                                    targetPos = leadPos,
-                                    totalFlightTimeSec = estimatedFlightTime.coerceAtLeast(0.1f),
-                                    apexHeightYards = 3f
-                                )
-                                passStartTimeSec = elapsedPlayTimeSec
-                                targetReceiverId = receiver.id
-                            }
-                        }
-                    }
-
-                    // 3. Ball Trajectory
-                    activeTrajectory?.let { trajectory ->
-                        val elapsedSincePass = elapsedPlayTimeSec - passStartTimeSec
-                        val ballPos = trajectory.getPositionAt(elapsedSincePass)
-                        currentBallPos = ballPos
-                        
-                        if (elapsedSincePass >= trajectory.totalFlightTimeSec) {
-                            // Pass reached target
-                            val receiver = offense.find { it.id == targetReceiverId }
-                            val dist = ballPos.distance2DTo(receiver?.currentPos ?: ballPos)
-                            
-                            if (dist < 2.5f) { // Catch radius
-                                val catchY = ballPos.y
-                                val yardsGained = if (isAttackingUp) {
-                                    (catchY - initialWorldY).toInt()
-                                } else {
-                                    (initialWorldY - catchY).toInt()
-                                }
-                                
-                                val totalYardLine = gameState.yardLine + yardsGained
-                                
-                                playResult = PlayResult(
-                                    yardsGained = yardsGained,
-                                    description = if (totalYardLine >= 100) "TOUCHDOWN!" else "Pass complete for $yardsGained yards!",
-                                    isTouchdown = totalYardLine >= 100,
-                                    isTurnover = false,
-                                    clockStops = totalYardLine >= 100
-                                )
-                            } else {
-                                playResult = PlayResult(
-                                    yardsGained = 0,
-                                    description = "Incomplete pass.",
-                                    isTouchdown = false,
-                                    isTurnover = false,
-                                    clockStops = true
-                                )
-                            }
-                            activeTrajectory = null
-                        }
-                    }
-
-                    // 4. Sack Check
-                    if (qbBrain != null && qbBrain.state == QbState.SACKED) {
-                        val currentY = qb!!.currentPos.y
-                        val yardsLost = if (isAttackingUp) {
-                            (initialWorldY - currentY).toInt()
-                        } else {
-                            (currentY - initialWorldY).toInt()
-                        }.coerceAtLeast(0)
-                        
-                        playResult = PlayResult(
-                            yardsGained = -yardsLost,
-                            description = "QB is SACKED for a loss of $yardsLost yards!",
-                            isTouchdown = false,
-                            isTurnover = false
-                        )
-                    }
-                }
-
-                // Update UI state with ball and player positions
-                _uiState.update { 
+        scope.launch(simDispatcher) {
+            val play = simulator.startPlay(snap)
+            var outcome: PlayOutcome?
+            do {
+                delay(scaledMillis(TICK_MILLIS).milliseconds)
+                outcome = play.tick(MatchSimulator.TICK_DELTA_SEC)
+                val players = play.players.map { p -> p.copy() }
+                _uiState.update {
                     it.copy(
-                        players = players.map { p -> p.copy() },
-                        ballPosition = currentBallPos
+                        gameState = liveClock(state, play.elapsedSec),
+                        players = players,
+                        ballPosition = play.ballPosition,
+                        overlay = liveOverlay(players, snap.losWorldY),
                     )
                 }
-            }
+            } while (outcome == null)
 
-            // Handle safety timeout
-            if (playResult == null && kickResult == null) {
-                playResult = PlayResult(0, "Play whistled dead.", false, false, clockStops = true)
-            }
-
-            // Resolve Play
-            val finalSimState = when {
-                kickResult != null -> {
-                    if (playType == PlayType.KICK) driveEngine.resolveKickoff(_uiState.value.gameState, kickResult!!)
-                    else driveEngine.resolvePunt(_uiState.value.gameState, kickResult!!)
-                }
-                else -> driveEngine.resolvePlay(_uiState.value.gameState, playResult!!)
-            }
-
-            _uiState.update { 
+            val nextState = simulator.resolve(state, outcome, play.elapsedSec)
+            val summary = "${outcome.description} (${offensivePlay.name} vs ${defensiveCall.name})"
+            _uiState.update {
                 it.copy(
-                    gameState = finalSimState,
+                    gameState = nextState,
                     isPlayRunning = false,
-                    playByPlayText = kickResult?.description ?: playResult!!.description,
-                    ballPosition = null
+                    playByPlayText = if (nextState.isGameOver) "$summary That's the final whistle!" else summary,
+                    ballPosition = null,
+                    overlay = TacticalOverlay.NONE,
                 )
             }
-            
-            // Map KickResult back to PlayResult for the callback
-            val callbackResult = playResult ?: PlayResult(
-                yardsGained = kickResult!!.endYardLine, // For kicks, we'll store the field position reached
-                description = kickResult!!.description,
-                isTouchdown = kickResult!!.isTouchdown,
-                isTurnover = true
-            )
-            
-            onPlayResolved(finalSimState, callbackResult)
+            preparePlayCalls()
+
+            // Leave the final frame up for a moment before lining up for the next snap
+            delay(scaledMillis(RESULT_PAUSE_MILLIS).milliseconds)
+            showPreview()
         }
+    }
+
+    override fun quickSim() {
+        val simulator = simulator ?: return
+        val current = _uiState.value
+        if (current.isPlayRunning || current.gameState.isGameOver) return
+
+        _uiState.update { it.copy(isPlayRunning = true, playByPlayText = "Simulating the rest of the game...", ballPosition = null) }
+        scope.launch(simDispatcher) {
+            val finalState = simulator.simulateRestOfGame(current.gameState)
+            _uiState.update {
+                it.copy(
+                    gameState = finalState,
+                    isPlayRunning = false,
+                    players = emptyList(),
+                    lineOfScrimmageY = null,
+                    firstDownMarkerY = null,
+                    overlay = TacticalOverlay.NONE,
+                    playByPlayText = "Quick sim complete. Final score: ${finalState.homeScore}-${finalState.awayScore}.",
+                )
+            }
+        }
+    }
+
+    /** CPU calls both sides, then offers the user their options with the CPU's suggestion preselected. */
+    private fun preparePlayCalls() {
+        val simulator = simulator ?: return
+        val state = _uiState.value.gameState
+        if (state.isGameOver) return
+
+        cpuOffense = simulator.playCaller.callOffense(state)
+        cpuDefense = simulator.playCaller.callDefense(state)
+        val isUserOnOffense = state.isHomePossession == userIsHome
+
+        _uiState.update {
+            it.copy(
+                playCall =
+                    it.playCall.copy(
+                        isUserOnOffense = isUserOnOffense,
+                        offenseOptions = if (isUserOnOffense) Playbook.offensivePlaysFor(state.phase) else emptyList(),
+                        defenseOptions = if (!isUserOnOffense && state.phase != GamePhase.KICKOFF) Playbook.defensiveCalls else emptyList(),
+                        selectedOffense = cpuOffense,
+                        selectedDefense = cpuDefense,
+                    ),
+            )
+        }
+    }
+
+    /** Lines both teams up for the calls that would run if the ball were snapped now, showing the user's assignments. */
+    private fun showPreview() {
+        val simulator = simulator ?: return
+        val current = _uiState.value
+        if (current.isPlayRunning || current.gameState.isGameOver) return
+
+        val offensivePlay = offensiveCallForSnap(current.playCall) ?: return
+        val defensiveCall = defensiveCallForSnap(current.playCall) ?: return
+        val snap = simulator.lineUp(current.gameState, offensivePlay, defensiveCall)
+        val isUserOnOffense = current.playCall.isUserOnOffense
+
+        _uiState.update {
+            it.withLineup(snap, current.gameState).copy(
+                ballPosition = null,
+                overlay =
+                    TacticalOverlay.build(
+                        players = snap.offense + snap.defense,
+                        losWorldY = snap.losWorldY,
+                        showOffense = it.showAssignments && isUserOnOffense,
+                        showDefense = it.showAssignments && !isUserOnOffense,
+                    ),
+            )
+        }
+    }
+
+    private fun MatchUiState.withLineup(
+        snap: Snap,
+        state: GameState,
+    ): MatchUiState {
+        val direction = if (snap.isAttackingUp) 1f else -1f
+        val showsFirstDownLine = state.phase == GamePhase.SCRIMMAGE && (snap.playType == PlayType.RUN || snap.playType == PlayType.PASS)
+        return copy(
+            players = snap.offense + snap.defense,
+            lineOfScrimmageY = snap.losWorldY,
+            firstDownMarkerY = if (showsFirstDownLine) snap.losWorldY + state.distance * direction else null,
+        )
+    }
+
+    private fun liveOverlay(
+        players: List<RunningPlayer>,
+        losWorldY: Float,
+    ): TacticalOverlay {
+        val show = _uiState.value.showAssignments
+        return if (show) TacticalOverlay.build(players, losWorldY, showOffense = true, showDefense = true) else TacticalOverlay.NONE
+    }
+
+    private fun offensiveCallForSnap(playCall: PlayCallState): OffensivePlay? =
+        if (playCall.isUserOnOffense && !playCall.isAutoCall) playCall.selectedOffense else cpuOffense
+
+    private fun defensiveCallForSnap(playCall: PlayCallState): DefensiveCall? =
+        if (!playCall.isUserOnOffense && !playCall.isAutoCall) playCall.selectedDefense else cpuDefense
+
+    private fun scaledMillis(millis: Long) = millis / _uiState.value.simSpeed.multiplier
+
+    /** The scoreboard clock while a play is running. Tries are untimed. */
+    private fun liveClock(
+        state: GameState,
+        elapsedSec: Float,
+    ): GameState = if (state.phase == GamePhase.EXTRA_POINT) state else state.copy(clockSeconds = (state.clockSeconds - elapsedSec.toInt()).coerceAtLeast(0))
+
+    private fun snapText(playType: PlayType) =
+        when (playType) {
+            PlayType.RUN -> "Hand-off!"
+            PlayType.PASS -> "Ball is snapped!"
+            PlayType.KICKOFF, PlayType.PUNT -> "Ready for the kick!"
+            PlayType.FIELD_GOAL -> "The snap, the hold..."
+        }
+
+    private companion object {
+        const val TICK_MILLIS = 50L // At 1x, one 0.05 s simulation tick per 50 ms: real time
+        const val RESULT_PAUSE_MILLIS = 1_500L
     }
 }

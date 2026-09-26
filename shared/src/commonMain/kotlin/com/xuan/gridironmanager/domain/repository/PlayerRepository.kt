@@ -7,16 +7,19 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.Json
 
-class PlayerRepository(defaultJsonLoader: () -> String) {
-    private val json = Json {
-        ignoreUnknownKeys = true
-        encodeDefaults = true
-    }
+class PlayerRepository(
+    initialPlayers: List<Player> = emptyList(),
+) {
+    private val json =
+        Json {
+            ignoreUnknownKeys = true
+            encodeDefaults = true
+        }
 
-    private val _players = MutableStateFlow<List<Player>>(emptyList())
+    private val _players = MutableStateFlow(initialPlayers)
     val players: StateFlow<List<Player>> = _players.asStateFlow()
 
-    init {
+    constructor(defaultJsonLoader: () -> String) : this() {
         loadCustomRoster(defaultJsonLoader())
     }
 
@@ -25,7 +28,9 @@ class PlayerRepository(defaultJsonLoader: () -> String) {
         _players.value = database.players
     }
 
-    fun getPlayersByTeam(teamId: String): List<Player> {
-        return _players.value.filter { it.teamId == teamId }
+    fun setPlayers(players: List<Player>) {
+        _players.value = players
     }
+
+    fun getPlayersByTeam(teamId: String): List<Player> = _players.value.filter { it.teamId == teamId }
 }

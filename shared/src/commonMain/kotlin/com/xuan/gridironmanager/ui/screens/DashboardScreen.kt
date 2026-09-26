@@ -1,19 +1,27 @@
 package com.xuan.gridironmanager.ui.screens
 
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.*
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.LargeTopAppBar
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.xuan.gridironmanager.domain.model.Player
 import com.xuan.gridironmanager.domain.model.Team
 
 @Composable
 fun DashboardScreen(
     myTeam: Team?,
-    roster: List<Player>,
+    opponent: Team?,
+    onViewRoster: () -> Unit,
     onStartGame: () -> Unit,
 ) {
     Scaffold(
@@ -30,6 +38,9 @@ fun DashboardScreen(
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text("Team Status", style = MaterialTheme.typography.titleLarge)
                         Text("Colors: ${myTeam.primaryColorHex} / ${myTeam.secondaryColorHex}")
+                        if (opponent != null) {
+                            Text("Next game: vs ${opponent.fullName}")
+                        }
                     }
                 }
 
@@ -42,17 +53,13 @@ fun DashboardScreen(
                     Text("Enter Live Game")
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-                Text("Roster", style = MaterialTheme.typography.titleMedium)
-                LazyColumn(modifier = Modifier.weight(1f)) {
-                    items(roster) { player ->
-                        ListItem(
-                            headlineContent = { Text(player.fullName) },
-                            supportingContent = { Text("${player.position} | Age: ${player.age}") },
-                            trailingContent = { Text("OVR: ${player.overallRating}") },
-                        )
-                    }
+                OutlinedButton(
+                    onClick = onViewRoster,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("View Roster")
                 }
             } else {
                 Text("Initializing League...")

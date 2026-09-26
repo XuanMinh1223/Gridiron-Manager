@@ -1,128 +1,250 @@
 package com.xuan.gridironmanager.ui.match
 
-import com.xuan.gridironmanager.domain.model.*
-import com.xuan.gridironmanager.domain.sim.match.DriveEngine
-import com.xuan.gridironmanager.domain.sim.match.GameState as SimGameState
-import com.xuan.gridironmanager.domain.sim.play.PlaySetupHelper
+import com.xuan.gridironmanager.domain.sim.match.GamePhase
+import com.xuan.gridironmanager.domain.sim.match.GameState
+import com.xuan.gridironmanager.domain.sim.playbook.Playbook
+import com.xuan.gridironmanager.testMatchup
+import com.xuan.gridironmanager.ui.match.overlay.TacticalOverlay
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import kotlin.random.Random
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class MatchSimulationTest {
-
     private val testDispatcher = StandardTestDispatcher()
     private val testScope = TestScope(testDispatcher)
-    private val driveEngine = DriveEngine()
-    private val presenter = MatchPresenter(driveEngine, testScope, testDispatcher)
+    private val matchup = testMatchup()
+
+    private fun presenter(seed: Int = 1) = MatchPresenter(testScope, testDispatcher, Random(seed))
+
+    private val homeFirstAndTen = GameState(yardLine = 30, isHomePossession = true)
 
     @Test
-    fun testKickoffSimulationCompletes() = testScope.runTest {
-        val roster = createMockRoster()
-        val offFormation = PlaySetupHelper.getKickoffFormation()
-        val defFormation = PlaySetupHelper.getKickReturnFormation()
-        
-        val offense = PlaySetupHelper.createRunningPlayers(
-            roster = roster,
-            formation = offFormation,
-            losWorldY = 35f,
-            isOffense = true,
-            isAttackingUp = true
-        )
-        val defense = PlaySetupHelper.createRunningPlayers(
-            roster = roster,
-            formation = defFormation,
-            losWorldY = 98f,
-            isOffense = false,
-            isAttackingUp = true
-        )
+    fun testOpeningKickoffCompletes() =
+        testScope.runTest {
+            val presenter = presenter()
+            presenter.startMatch(matchup)
 
-        presenter.updateGameState(SimGameState(yardLine = 35))
-        
-        presenter.snapBall(offense, defense, PlayType.KICK, isAttackingUp = true)
-        
-        // Use a timeout check or advanceUntilIdle
-        advanceUntilIdle()
-        
-        val state = presenter.uiState.value
-        assertTrue(!state.isPlayRunning, "Kickoff simulation should have completed")
-        assertTrue(state.gameState.yardLine != 35, "Yard line should have moved from 35")
-    }
+            presenter.snapBall()
+            advanceUntilIdle()
+
+            val state = presenter.uiState.value
+            assertFalse(state.isPlayRunning, "Kickoff simulation should have completed")
+            assertEquals(GamePhase.SCRIMMAGE, state.gameState.phase)
+            assertFalse(state.gameState.isHomePossession, "The away team receives the opening kickoff")
+        }
 
     @Test
-    fun testPassSimulationCompletes() = testScope.runTest {
-        val roster = createMockRoster()
-        val offFormation = PlaySetupHelper.getShotgunFormation()
-        val defFormation = PlaySetupHelper.getBaseDefense()
-        
-        val offense = PlaySetupHelper.createRunningPlayers(
-            roster = roster,
-            formation = offFormation,
-            losWorldY = 25f,
-            isOffense = true,
-            isAttackingUp = true
-        )
-        val defense = PlaySetupHelper.createRunningPlayers(
-            roster = roster,
-            formation = defFormation,
-            losWorldY = 25f,
-            isOffense = false,
-            isAttackingUp = true
-        )
+    fun testGameClockRunsInRealTimeDuringPlay() =
+        testScope.runTest {
+            val presenter = presenter()
+            presenter.startMatch(matchup)
 
-        presenter.updateGameState(SimGameState(yardLine = 25))
-        
-        presenter.snapBall(offense, defense, PlayType.PASS, isAttackingUp = true)
-        
-        advanceUntilIdle()
-        
-        val state = presenter.uiState.value
-        assertTrue(!state.isPlayRunning, "Pass simulation should have completed")
-    }
+            presenter.snapBall()
+            advanceUntilIdle()
 
-    private fun createMockRoster(): List<Player> {
-        val teamId = "TEAM1"
-        return listOf(
-            createPlayer(teamId, "QB"),
-            createPlayer(teamId, "RB"),
-            createPlayer(teamId, "WR"),
-            createPlayer(teamId, "WR"),
-            createPlayer(teamId, "WR"),
-            createPlayer(teamId, "TE"),
-            createPlayer(teamId, "C"),
-            createPlayer(teamId, "OG"),
-            createPlayer(teamId, "OG"),
-            createPlayer(teamId, "OT"),
-            createPlayer(teamId, "OT"),
-            createPlayer(teamId, "K"),
-            createPlayer(teamId, "P"),
-            createPlayer(teamId, "DT"),
-            createPlayer(teamId, "EDGE"),
-            createPlayer(teamId, "LB"),
-            createPlayer(teamId, "CB"),
-            createPlayer(teamId, "S")
-        )
-    }
+            // A kick hangs for at most ~5.2 seconds, and the clock stops on the change of possession
+            val clockSeconds = presenter.uiState.value.gameState.clockSeconds
+            assertTrue(clockSeconds in 894..899, "Expected ~5s off the clock but it read $clockSeconds")
+        }
 
-    private fun createPlayer(teamId: String, position: String): Player {
-        return Player(
-            id = "p_$position",
-            teamId = teamId,
-            firstName = "John",
-            lastName = position,
-            position = position,
-            age = 25,
-            yearsPro = 3,
-            physicalProfile = PhysicalProfile(74, 220),
-            attributes = PlayerAttributes(
-                speed = 80, acceleration = 80, strength = 80, verticalJump = 80,
-                awareness = 80, playRecognition = 80, throwPower = 90, throwAccuracy = 85,
-                catching = 80, kickPower = 90, kickAccuracy = 85
-            )
-        )
-    }
+    @Test
+    fun testSnapIsIgnoredAfterGameOver() =
+        testScope.runTest {
+            val presenter = presenter()
+            val finalState = GameState(quarter = 4, clockSeconds = 0, isGameOver = true)
+            presenter.startMatch(matchup, finalState)
+
+            presenter.snapBall()
+            advanceUntilIdle()
+
+            val state = presenter.uiState.value
+            assertFalse(state.isPlayRunning)
+            assertEquals(finalState, state.gameState)
+            assertTrue(state.players.isEmpty(), "No play should have been simulated")
+        }
+
+    @Test
+    fun testUserOnOffenseChoosesFromThePlaybookWithCpuSuggestionPreselected() =
+        testScope.runTest {
+            val presenter = presenter()
+            presenter.startMatch(matchup, homeFirstAndTen)
+
+            val playCall = presenter.uiState.value.playCall
+            assertTrue(playCall.isUserOnOffense)
+            assertTrue(playCall.isUserChoosing)
+            assertEquals(Playbook.offensivePlaysFor(GamePhase.SCRIMMAGE), playCall.offenseOptions)
+            assertTrue(playCall.selectedOffense in playCall.offenseOptions)
+            assertTrue(playCall.defenseOptions.isEmpty())
+        }
+
+    @Test
+    fun testUserOnDefenseChoosesACoverage() =
+        testScope.runTest {
+            val presenter = presenter()
+            presenter.startMatch(matchup, homeFirstAndTen.copy(isHomePossession = false))
+
+            val playCall = presenter.uiState.value.playCall
+            assertFalse(playCall.isUserOnOffense)
+            assertEquals(Playbook.defensiveCalls, playCall.defenseOptions)
+            assertTrue(playCall.offenseOptions.isEmpty())
+        }
+
+    @Test
+    fun testSelectedPlayIsTheOneThatRuns() =
+        testScope.runTest {
+            val presenter = presenter()
+            presenter.startMatch(matchup, homeFirstAndTen)
+
+            presenter.selectOffensivePlay(Playbook.PUNT)
+            presenter.snapBall()
+            advanceUntilIdle()
+
+            val state = presenter.uiState.value
+            assertFalse(state.gameState.isHomePossession, "Punting on first down hands the ball over")
+            assertTrue(state.playByPlayText.contains("Punt vs"), state.playByPlayText)
+        }
+
+    @Test
+    fun testAutoCallIgnoresTheUsersSelection() =
+        testScope.runTest {
+            val presenter = presenter()
+            presenter.startMatch(matchup, homeFirstAndTen)
+
+            presenter.setAutoCall(true)
+            presenter.selectOffensivePlay(Playbook.PUNT)
+            presenter.snapBall()
+            advanceUntilIdle()
+
+            val state = presenter.uiState.value
+            assertFalse(state.playCall.isUserChoosing)
+            assertFalse(state.playByPlayText.contains("Punt vs"), "The CPU never punts on first down")
+        }
+
+    @Test
+    fun testSameSeedPlaysOutIdenticallyAtEverySpeed() =
+        testScope.runTest {
+            fun playSnaps(speed: SimSpeed): MatchUiState {
+                val presenter = presenter(seed = 9)
+                presenter.startMatch(matchup)
+                presenter.setSimSpeed(speed)
+                repeat(8) {
+                    presenter.snapBall()
+                    advanceUntilIdle()
+                }
+                return presenter.uiState.value
+            }
+
+            val realTime = playSnaps(SimSpeed.X1)
+            val fast = playSnaps(SimSpeed.X10)
+
+            assertEquals(realTime.gameState, fast.gameState)
+            assertEquals(realTime.playByPlayText, fast.playByPlayText)
+        }
+
+    @Test
+    fun testHigherSpeedPlaysBackFaster() =
+        testScope.runTest {
+            fun playbackMillis(speed: SimSpeed): Long {
+                val presenter = presenter()
+                presenter.startMatch(matchup)
+                presenter.setSimSpeed(speed)
+                val start = testScheduler.currentTime
+                presenter.snapBall()
+                advanceUntilIdle()
+                return testScheduler.currentTime - start
+            }
+
+            val realTime = playbackMillis(SimSpeed.X1)
+            val fast = playbackMillis(SimSpeed.X10)
+
+            // The opening kickoff hangs for several seconds
+            assertTrue(realTime > 3_000, "Real-time kickoff took ${realTime}ms")
+            assertTrue(fast in (realTime / 10 - 50)..(realTime / 10 + 50), "10x kickoff took ${fast}ms vs ${realTime}ms at 1x")
+        }
+
+    @Test
+    fun testQuickSimPlaysOutTheRestOfTheGame() =
+        testScope.runTest {
+            val presenter = presenter()
+            presenter.startMatch(matchup)
+
+            presenter.quickSim()
+            advanceUntilIdle()
+
+            val state = presenter.uiState.value
+            assertTrue(state.gameState.isGameOver)
+            assertFalse(state.isPlayRunning)
+            assertTrue(state.playByPlayText.startsWith("Quick sim complete"))
+        }
+
+    @Test
+    fun testPreviewLinesUpTheSelectedPlayWithTheUsersAssignments() =
+        testScope.runTest {
+            val presenter = presenter()
+            presenter.startMatch(matchup, homeFirstAndTen)
+
+            presenter.selectOffensivePlay(Playbook.FOUR_VERTICALS)
+
+            val state = presenter.uiState.value
+            assertEquals(22, state.players.size)
+            assertEquals(5, state.overlay.routes.size)
+            assertTrue(state.overlay.manLinks.isEmpty() && state.overlay.zones.isEmpty(), "The CPU defense's coverage stays hidden")
+        }
+
+    @Test
+    fun testUserOnDefenseSeesTheirCoverageNotTheOpponentsRoutes() =
+        testScope.runTest {
+            val presenter = presenter()
+            presenter.startMatch(matchup, homeFirstAndTen.copy(isHomePossession = false))
+
+            presenter.selectDefensiveCall(Playbook.COVER_3)
+
+            val overlay = presenter.uiState.value.overlay
+            assertEquals(7, overlay.zones.size)
+            assertTrue(overlay.routes.isEmpty())
+        }
+
+    @Test
+    fun testAssignmentsCanBeHidden() =
+        testScope.runTest {
+            val presenter = presenter()
+            presenter.startMatch(matchup, homeFirstAndTen)
+
+            presenter.setShowAssignments(false)
+
+            assertEquals(TacticalOverlay.NONE, presenter.uiState.value.overlay)
+            assertEquals(22, presenter.uiState.value.players.size, "Players still line up")
+        }
+
+    @Test
+    fun testNextPlayIsPreviewedAfterTheResult() =
+        testScope.runTest {
+            val presenter = presenter()
+            presenter.startMatch(matchup, homeFirstAndTen)
+
+            presenter.snapBall()
+            advanceUntilIdle()
+
+            val state = presenter.uiState.value
+            assertFalse(state.isPlayRunning)
+            assertEquals(22, state.players.size)
+            assertTrue(state.players.all { it.currentWaypointIndex == 0 }, "Players are back in formation")
+        }
+
+    @Test
+    fun testKickoffsOfferNoChoice() =
+        testScope.runTest {
+            val presenter = presenter()
+            presenter.startMatch(matchup)
+
+            assertFalse(presenter.uiState.value.playCall.isUserChoosing)
+        }
 }

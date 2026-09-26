@@ -1,6 +1,5 @@
 package com.xuan.gridironmanager.ui.roster
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,8 +18,11 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,9 +35,32 @@ import com.xuan.gridironmanager.domain.model.PositionType
 
 @Composable
 fun RosterScreen(
+    teamName: String,
     uiState: RosterUiState,
-    onPlayerClick: (String) -> Unit,
-    modifier: Modifier = Modifier
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Scaffold(
+        modifier = modifier,
+        topBar = {
+            TopAppBar(
+                title = { Text(teamName) },
+                navigationIcon = {
+                    TextButton(onClick = onBack) {
+                        Text("Back")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        RosterContent(uiState, Modifier.padding(padding))
+    }
+}
+
+@Composable
+private fun RosterContent(
+    uiState: RosterUiState,
+    modifier: Modifier = Modifier,
 ) {
     Box(modifier = modifier.fillMaxSize()) {
         when (uiState) {
@@ -46,20 +71,17 @@ fun RosterScreen(
                 Text(
                     text = uiState.message,
                     color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.align(Alignment.Center)
+                    modifier = Modifier.align(Alignment.Center),
                 )
             }
             is RosterUiState.Success -> {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(uiState.players) { player ->
-                        PlayerRow(
-                            player = player,
-                            onClick = { onPlayerClick(player.id) }
-                        )
+                        PlayerRow(player = player)
                     }
                 }
             }
@@ -68,42 +90,41 @@ fun RosterScreen(
 }
 
 @Composable
-fun PlayerRow(
-    player: Player,
-    onClick: () -> Unit
-) {
+fun PlayerRow(player: Player) {
     val positionInfo = Position.entries.find { it.abbreviation == player.position }
-    val badgeColor = when (positionInfo?.type) {
-        PositionType.OFFENSE -> Color(0xFF2196F3) // Blue
-        PositionType.DEFENSE -> Color(0xFFF44336) // Red
-        PositionType.SPECIAL_TEAMS -> Color(0xFF4CAF50) // Green
-        null -> Color.Gray
-    }
+    val badgeColor =
+        when (positionInfo?.type) {
+            PositionType.OFFENSE -> Color(0xFF2196F3) // Blue
+            PositionType.DEFENSE -> Color(0xFFF44336) // Red
+            PositionType.SPECIAL_TEAMS -> Color(0xFF4CAF50) // Green
+            null -> Color.Gray
+        }
 
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        modifier =
+            Modifier
+                .fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
     ) {
         Row(
-            modifier = Modifier
-                .padding(12.dp)
-                .fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
+            modifier =
+                Modifier
+                    .padding(12.dp)
+                    .fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             // Position Badge
             Surface(
                 color = badgeColor,
                 shape = RoundedCornerShape(4.dp),
-                modifier = Modifier.size(width = 40.dp, height = 24.dp)
+                modifier = Modifier.size(width = 40.dp, height = 24.dp),
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Text(
                         text = player.position,
                         color = Color.White,
                         style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
                     )
                 }
             }
@@ -115,12 +136,12 @@ fun PlayerRow(
                 Text(
                     text = player.fullName,
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.SemiBold,
                 )
                 Text(
                     text = "Age: ${player.age} | Exp: ${player.yearsPro}y",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 
@@ -128,14 +149,14 @@ fun PlayerRow(
             Surface(
                 color = MaterialTheme.colorScheme.secondaryContainer,
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.size(40.dp)
+                modifier = Modifier.size(40.dp),
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Text(
                         text = player.overallRating.toString(),
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
                     )
                 }
             }

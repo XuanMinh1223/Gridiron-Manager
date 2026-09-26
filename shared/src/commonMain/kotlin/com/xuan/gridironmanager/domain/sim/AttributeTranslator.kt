@@ -2,6 +2,7 @@ package com.xuan.gridironmanager.domain.sim
 
 object AttributeTranslator {
     private const val INCH_TO_YARD = 0.0277778f
+    private const val CHIP_SHOT_YDS = 20
 
     /**
      * Maps speed rating (0-99) to yards per second.
@@ -18,7 +19,10 @@ object AttributeTranslator {
      * 99 jump = 40 inches
      * 0 jump = 10 inches
      */
-    fun calculateMaxCatchHeightYards(heightInches: Int, verticalJumpRating: Int): Float {
+    fun calculateMaxCatchHeightYards(
+        heightInches: Int,
+        verticalJumpRating: Int,
+    ): Float {
         val jumpRating = verticalJumpRating.coerceIn(0, 99).toFloat()
         val jumpInches = 10.0f + (jumpRating / 99.0f) * 30.0f
         return (heightInches + jumpInches) * INCH_TO_YARD
@@ -30,7 +34,10 @@ object AttributeTranslator {
      * 99 accuracy = 0.5 yard variance at 20 yards.
      * 0 accuracy = 3.0 yard variance at 20 yards.
      */
-    fun calculatePassAccuracyRadius(accuracyRating: Int, targetDistanceYards: Float): Float {
+    fun calculatePassAccuracyRadius(
+        accuracyRating: Int,
+        targetDistanceYards: Float,
+    ): Float {
         val rating = accuracyRating.coerceIn(0, 99).toFloat()
         val varianceAt20 = 3.0f - (rating / 99.0f) * 2.5f
         return varianceAt20 * (targetDistanceYards / 20.0f)
@@ -55,11 +62,36 @@ object AttributeTranslator {
         val rating = kickPower.coerceIn(0, 99).toFloat()
         return 3.5f + (rating / 99.0f) * 1.7f
     }
-    
+
     /**
      * Helper to get standing height in yards.
      */
-    fun calculateStandingHeightYards(heightInches: Int): Float {
-        return heightInches * INCH_TO_YARD
+    fun calculateStandingHeightYards(heightInches: Int): Float = heightInches * INCH_TO_YARD
+
+    /**
+     * Longest field goal a kicker can make, in yards.
+     * 99 = 65 yards
+     * 0 = 40 yards
+     */
+    fun calculateFieldGoalRangeYards(kickPower: Int): Int {
+        val rating = kickPower.coerceIn(0, 99).toFloat()
+        return (40.0f + (rating / 99.0f) * 25.0f).toInt()
+    }
+
+    /**
+     * Chance (0..1) of making a field goal from [distanceYds].
+     * Chip shots are near-automatic, falling off towards the edge of the kicker's range; accuracy scales the whole curve.
+     */
+    fun calculateFieldGoalMakeChance(
+        distanceYds: Int,
+        kickPower: Int,
+        kickAccuracy: Int,
+    ): Float {
+        val range = calculateFieldGoalRangeYards(kickPower)
+        if (distanceYds > range) return 0f
+
+        val difficulty = ((distanceYds - CHIP_SHOT_YDS).toFloat() / (range - CHIP_SHOT_YDS)).coerceIn(0f, 1f)
+        val accuracy = kickAccuracy.coerceIn(0, 99) / 99.0f
+        return (0.99f - 0.38f * difficulty * difficulty) * (0.9f + 0.1f * accuracy)
     }
 }
