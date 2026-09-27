@@ -55,6 +55,8 @@ fun App() {
                     uiState = matchUiState,
                     homeTeamName = matchup?.homeTeam?.abbreviation ?: "HOME",
                     awayTeamName = matchup?.awayTeam?.abbreviation ?: "AWAY",
+                    homeRoster = matchup?.homeRoster.orEmpty(),
+                    awayRoster = matchup?.awayRoster.orEmpty(),
                     homeTeamPrimaryColorHex = matchup?.homeTeam?.primaryColorHex ?: "#0D47A1",
                     homeTeamSecondaryColorHex = matchup?.homeTeam?.secondaryColorHex ?: "#FFFFFF",
                     awayTeamPrimaryColorHex = matchup?.awayTeam?.primaryColorHex ?: "#C62828",
