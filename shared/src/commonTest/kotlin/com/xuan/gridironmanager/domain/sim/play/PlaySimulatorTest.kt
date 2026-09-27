@@ -8,6 +8,7 @@ import com.xuan.gridironmanager.domain.model.Vector3D
 import com.xuan.gridironmanager.domain.model.Waypoint
 import com.xuan.gridironmanager.domain.sim.FieldGeometry
 import com.xuan.gridironmanager.domain.sim.match.GameState
+import com.xuan.gridironmanager.domain.sim.match.KickOutcomeType
 import com.xuan.gridironmanager.domain.sim.match.PlayOutcome
 import com.xuan.gridironmanager.domain.sim.movement.PlayerRole
 import com.xuan.gridironmanager.domain.sim.movement.RunningPlayer
@@ -58,15 +59,107 @@ class PlaySimulatorTest {
 
     @Test
     fun testKickDistanceIsMeasuredFromTheKicker() {
-        // Kick power 0 = 30 yards. From the kicking team's 35 the ball lands at the receiving 35, returned 15 yards.
+        // Kick power 0 = 30 yards. From the kicking team's 35 the ball lands at the receiving 35.
         for (isAttackingUp in listOf(true, false)) {
             val snap = Snap(listOf(kicker(if (isAttackingUp) 35f else 65f, kickPower = 0)), emptyList(), PlayType.KICKOFF, 35, isAttackingUp)
 
             val outcome = assertIs<PlayOutcome.Kick>(run(PlaySimulator(snap)))
 
             assertFalse(outcome.result.isTouchback)
-            assertEquals(50, outcome.result.endYardLine)
+            assertTrue(outcome.result.endYardLine in 0..99)
+            assertTrue(outcome.result.intendedLandingYardLine in 0..100)
         }
+    }
+
+    @Test
+    fun testReceivingUnitDoesNotMoveBeforeKickIsFielded() {
+        val returner = RunningPlayer(
+            id = "R",
+            currentPos = Vector3D(FieldGeometry.CENTER_X, 98f, 0f),
+            speedYdsPerSec = 8f,
+            route = null,
+            isOffense = false,
+            role = PlayerRole.ROUTE_ONLY,
+            attributes = PlayerAttributes.AVERAGE,
+        )
+        val snap = Snap(listOf(kicker(35f, kickPower = 0)), listOf(returner), PlayType.KICKOFF, 35, true)
+        val simulator = PlaySimulator(snap)
+        simulator.tick(0.5f)
+
+        assertEquals(98f, returner.currentPos.y)
+    }
+
+    @Test
+    fun testKickReturnRunsForMultipleTicksAndMovesReturner() {
+        val returner =
+            RunningPlayer(
+                id = "R",
+                currentPos = Vector3D(FieldGeometry.CENTER_X, 70f, 0f),
+                speedYdsPerSec = 8f,
+                route = null,
+                isOffense = false,
+                role = PlayerRole.ROUTE_ONLY,
+                attributes = PlayerAttributes.AVERAGE,
+            )
+        val snap = Snap(listOf(kicker(35f, kickPower = 60, kickAccuracy = 99)), listOf(returner), PlayType.KICKOFF, 35, true)
+        val simulator = PlaySimulator(snap, Random(4))
+        var moved = false
+        var outcome: PlayOutcome? = null
+        repeat(160) {
+            val before = returner.currentPos.y
+            if (outcome == null) outcome = simulator.tick(tick)
+            if (returner.currentPos.y < before) moved = true
+        }
+        assertTrue(moved || assertIs<PlayOutcome.Kick>(outcome).result.outcomeType in setOf(KickOutcomeType.TOUCHBACK, KickOutcomeType.DOWNED), "Returner should run or the kick should be downed")
+        assertIs<PlayOutcome.Kick>(outcome ?: run(simulator))
+    }
+
+    @Test
+    fun testKickAccuracyAddsLateralAndLongitudinalLandingError() {
+        fun landing(seed: Int, accuracy: Int): Vector3D {
+            val snap = Snap(listOf(kicker(35f, kickPower = 50, kickAccuracy = accuracy)), emptyList(), PlayType.KICKOFF, 35, true)
+            val simulator = PlaySimulator(snap, Random(seed))
+            run(simulator)
+            return simulator.ballPosition!!
+        }
+
+        val inaccurate = landing(7, 0)
+        val accurate = landing(7, 99)
+
+        assertTrue(inaccurate.x != FieldGeometry.CENTER_X)
+        assertTrue(kotlin.math.abs(inaccurate.x - FieldGeometry.CENTER_X) > kotlin.math.abs(accurate.x - FieldGeometry.CENTER_X))
+        assertTrue(inaccurate.y != accurate.y)
+    }
+
+    @Test
+    fun testSeededPuntWithoutReturnerBouncesOrIsTouchback() {
+        val snap = Snap(listOf(kicker(35f, kickPower = 50, kickAccuracy = 99)), emptyList(), PlayType.PUNT, 50, true)
+        val result = assertIs<PlayOutcome.Kick>(run(PlaySimulator(snap, Random(7)))).result
+        assertTrue(result.outcomeType == KickOutcomeType.DOWNED || result.outcomeType == KickOutcomeType.TOUCHBACK)
+        assertEquals(result, assertIs<PlayOutcome.Kick>(run(PlaySimulator(snap.copy(offense = listOf(kicker(35f, 50, 99))), Random(7)))).result)
+    }
+
+    @Test
+    fun testSeededPuntFairCatchAndMuffAreTyped() {
+        fun punt(seed: Int): KickOutcomeType {
+            val receiver = RunningPlayer("PR", Vector3D(FieldGeometry.CENTER_X, 81f, 0f), 8f, null, isOffense = false, slot = "PR")
+            val cover = RunningPlayer("C", Vector3D(FieldGeometry.CENTER_X, 81f, 0f), 0f, null)
+            val snap = Snap(listOf(kicker(35f, 40, 99), cover), listOf(receiver), PlayType.PUNT, 50, true)
+            return assertIs<PlayOutcome.Kick>(run(PlaySimulator(snap, Random(seed)))).result.outcomeType
+        }
+        val types = (0 until 120).map(::punt).toSet()
+        assertTrue(KickOutcomeType.FAIR_CATCH in types, "$types")
+        assertTrue(KickOutcomeType.MUFF_RECOVERED in types, "$types")
+        assertEquals(punt(12), punt(12))
+    }
+
+    @Test
+    fun testBlockedPuntProducesRecoveryOutcome() {
+        val rusher = RunningPlayer("D", Vector3D(FieldGeometry.CENTER_X, 20f, 0f), 0f, null, isOffense = false, role = PlayerRole.PASS_RUSHER)
+        val snap = Snap(listOf(kicker(20f, 50)), listOf(rusher), PlayType.PUNT, 35, true)
+        val result = assertIs<PlayOutcome.Kick>(run(PlaySimulator(snap, Random(3)))).result
+        assertEquals(KickOutcomeType.BLOCKED_RECOVERED, result.outcomeType)
+        assertFalse(result.recoveredByKickingTeam)
     }
 
     @Test

@@ -50,9 +50,9 @@ class MatchSimulationTest {
             presenter.snapBall()
             advanceUntilIdle()
 
-            // A kick hangs for at most ~5.2 seconds, and the clock stops on the change of possession
+            // Operation, flight, and the live return all run game clock until the change of possession.
             val clockSeconds = presenter.uiState.value.gameState.clockSeconds
-            assertTrue(clockSeconds in 894..899, "Expected ~5s off the clock but it read $clockSeconds")
+            assertTrue(clockSeconds in 888..899, "Expected a live special-teams play but the clock read $clockSeconds")
         }
 
     @Test

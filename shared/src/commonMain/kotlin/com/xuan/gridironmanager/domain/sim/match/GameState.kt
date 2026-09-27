@@ -22,6 +22,8 @@ data class GameState(
     val isHomePossession: Boolean = true,
     val phase: GamePhase = GamePhase.SCRIMMAGE,
     val isGameOver: Boolean = false,
+    /** A safety free kick uses a distinct spot and short/out-of-bounds enforcement. */
+    val isSafetyFreeKick: Boolean = false,
 ) {
     /** Points ahead (positive) or behind (negative) from the possessing team's point of view. */
     val possessionScoreMargin: Int get() = if (isHomePossession) homeScore - awayScore else awayScore - homeScore

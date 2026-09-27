@@ -9,6 +9,7 @@ import com.xuan.gridironmanager.domain.sim.ai.QbBrain
 import com.xuan.gridironmanager.domain.sim.ai.QbState
 import com.xuan.gridironmanager.domain.sim.match.FieldGoalResult
 import com.xuan.gridironmanager.domain.sim.match.KickResult
+import com.xuan.gridironmanager.domain.sim.match.KickOutcomeType
 import com.xuan.gridironmanager.domain.sim.match.PlayOutcome
 import com.xuan.gridironmanager.domain.sim.match.PlayResult
 import com.xuan.gridironmanager.domain.sim.match.Rules
@@ -55,6 +56,8 @@ class PlaySimulator(
     /** The runner on run plays, or the receiver after a catch. */
     private var ballCarrier = if (playType == PlayType.RUN) offense.find { it.role == PlayerRole.BALL_CARRIER } else null
     private val kicker = offense.find { it.role == PlayerRole.KICKER }
+    private val holder = if (playType == PlayType.FIELD_GOAL) offense.find { it.slot == "H" } else null
+    private var intendedKickTarget: Vector3D? = null
 
     private val blocking = BlockingModel(offense, defense, playType, random)
 
@@ -62,6 +65,10 @@ class PlaySimulator(
     private var throwTimeSec = 0f
     private var targetReceiver: RunningPlayer? = null
     private var fieldGoalResult: FieldGoalResult? = null
+    private var kickPhase = KickPhase.OPERATION
+    private var kickContactSec = 0f
+    private var kickLandingYardLine = 0
+    private var kickReturner: RunningPlayer? = null
     private var carrierVelocity = Vector3D(0f, 0f, 0f)
     private val defenderTracking = mutableMapOf<String, DefenderTrackingState>()
 
@@ -74,10 +81,19 @@ class PlaySimulator(
         if (playType == PlayType.KICKOFF || playType == PlayType.PUNT) {
             val kicker = kicker ?: offense.first()
             val kickDistance = AttributeTranslator.calculateKickDistanceYards(kicker.attributes.kickPower)
+            intendedKickTarget = kicker.currentPos.copy(y = kicker.currentPos.y + kickDistance * direction, z = 0f)
+            val placementError = AttributeTranslator.calculateKickPlacementError(kicker.attributes.kickAccuracy, kickDistance)
+            val errorAngle = random.nextFloat() * 2f * PI.toFloat()
+            val errorMagnitude = placementError * sqrt(random.nextFloat())
+            val actualTarget =
+                intendedKickTarget!!.copy(
+                    x = intendedKickTarget!!.x + cos(errorAngle) * errorMagnitude,
+                    y = intendedKickTarget!!.y + sin(errorAngle) * errorMagnitude,
+                )
             ballTrajectory =
                 BallTrajectory(
                     startPos = kicker.currentPos,
-                    targetPos = kicker.currentPos.copy(y = kicker.currentPos.y + kickDistance * direction, z = 0f),
+                    targetPos = actualTarget,
                     totalFlightTimeSec = AttributeTranslator.calculateHangtimeSec(kicker.attributes.kickPower),
                     apexHeightYards = KICK_APEX_YDS,
                 )
@@ -86,6 +102,10 @@ class PlaySimulator(
 
     fun tick(tickDeltaSec: Float): PlayOutcome? {
         elapsedSec += tickDeltaSec
+
+        if (playType == PlayType.KICKOFF || playType == PlayType.PUNT) {
+            return tickSpecialTeams(tickDeltaSec)
+        }
 
         val carrierStart = ballCarrier?.currentPos
         moveOffense(tickDeltaSec)
@@ -100,13 +120,71 @@ class PlaySimulator(
 
         val outcome =
             when (playType) {
-                PlayType.KICKOFF, PlayType.PUNT -> tickKick()
-                PlayType.FIELD_GOAL -> tickFieldGoal()
+                PlayType.FIELD_GOAL -> tickFieldGoal(tickDeltaSec)
                 PlayType.RUN -> tickRun()
                 PlayType.PASS -> tickPass(tickDeltaSec)
             }
 
         return outcome ?: if (elapsedSec >= MAX_PLAY_DURATION_SEC) whistleDead() else null
+    }
+
+    private fun tickSpecialTeams(tickDeltaSec: Float): PlayOutcome? {
+        val kicker = kicker ?: return whistleDead()
+        when (kickPhase) {
+            KickPhase.OPERATION -> {
+                // The operation is intentionally short but non-zero: the ball is not in flight
+                // until the kicker completes the approach and contacts it.
+                if (elapsedSec < KICK_OPERATION_SEC) {
+                    moveKickerToContact(kicker, tickDeltaSec)
+                    if (playType == PlayType.PUNT) movePuntRush(tickDeltaSec)
+                    return null
+                }
+                if (playType == PlayType.PUNT && defense.any { it.role == PlayerRole.PASS_RUSHER && it.currentPos.distance2DTo(kicker.currentPos) <= PUNT_BLOCK_RADIUS_YDS }) {
+                    val spot = receivingYardLine(kicker.currentPos)
+                val recoverer = (defense + offense).filter { it !== kicker }.minByOrNull { it.currentPos.distance2DTo(kicker.currentPos) }
+                    return kickOutcome(spot, "Punt BLOCKED and recovered!", false, false, spot, spot, KickOutcomeType.BLOCKED_RECOVERED, recoverer?.isOffense == true)
+                }
+                kickContactSec = elapsedSec
+                kickPhase = KickPhase.FLIGHT
+            }
+
+            KickPhase.FLIGHT -> {
+                moveCoverage(kicker, tickDeltaSec)
+                val trajectory = ballTrajectory ?: return null
+                if (elapsedSec - kickContactSec < trajectory.totalFlightTimeSec) {
+                    ballPosition = trajectory.getPositionAt(elapsedSec - kickContactSec)
+                    return null
+                }
+                return fieldKick() ?: run {
+                    kickPhase = KickPhase.RETURN
+                    null
+                }
+            }
+
+            KickPhase.RETURN -> {
+                return tickKickReturn(tickDeltaSec)
+            }
+        }
+        return null
+    }
+
+    private fun moveKickerToContact(kicker: RunningPlayer, tickDeltaSec: Float) {
+        val target = kicker.currentPos.copy(y = kicker.currentPos.y + direction * KICK_APPROACH_YDS)
+        MovementEngine.pursue(kicker, target, tickDeltaSec)
+    }
+
+    private fun movePuntRush(tickDeltaSec: Float) {
+        val punter = kicker ?: return
+        defense.filter { it.role == PlayerRole.PASS_RUSHER }.forEach { MovementEngine.pursue(it, punter.currentPos, tickDeltaSec) }
+    }
+
+    private fun moveCoverage(kicker: RunningPlayer, tickDeltaSec: Float) {
+        val direction = if (snap.isAttackingUp) 1f else -1f
+        val players = offense.filter { it !== kicker }
+        players.forEach { player ->
+            val target = player.currentPos.copy(y = player.currentPos.y + KICK_COVERAGE_SPRINT_YDS * direction)
+            MovementEngine.pursue(player, target, tickDeltaSec)
+        }
     }
 
     private fun moveOffense(tickDeltaSec: Float) {
@@ -204,52 +282,141 @@ class PlaySimulator(
         return threat?.currentPos?.let { it.copy(y = it.y + COVERAGE_CUSHION_YDS * direction) } ?: landmark
     }
 
-    private fun tickKick(): PlayOutcome? {
+    private fun fieldKick(): PlayOutcome? {
         val trajectory = ballTrajectory ?: return null
-        val ball = trajectory.getPositionAt(elapsedSec)
+        val ball = trajectory.targetPos
         ballPosition = ball
-        if (elapsedSec < trajectory.totalFlightTimeSec) return null
 
-        // Yard line from the kicking team's perspective (0-100)
         val kickingYardLine = if (snap.isAttackingUp) ball.y else Rules.FIELD_LENGTH_YDS - ball.y
-        // Yard line for the receiving team (distance from their own goal)
-        val receivingYardLine = (Rules.FIELD_LENGTH_YDS - kickingYardLine).toInt()
+        kickLandingYardLine = (Rules.FIELD_LENGTH_YDS - kickingYardLine).toInt().coerceIn(0, Rules.FIELD_LENGTH_YDS)
+        val intendedLandingYardLine = receivingYardLine(intendedKickTarget ?: trajectory.targetPos)
 
-        val result =
-            when {
-                kickingYardLine >= Rules.FIELD_LENGTH_YDS -> {
-                    KickResult(endYardLine = 0, description = "Touchback.", isTouchback = true, isOutOfBounds = false)
-                }
+        if (playType == PlayType.KICKOFF && kickLandingYardLine > Rules.KICKOFF_LANDING_ZONE_FRONT_YARD_LINE) {
+            return kickOutcome(kickLandingYardLine, "Kick short of the landing zone.", false, false, intendedLandingYardLine, kickLandingYardLine, KickOutcomeType.SHORT_KICK)
+        }
+        if (kickingYardLine >= Rules.FIELD_LENGTH_YDS) {
+            return kickOutcome(0, "Touchback.", true, false, intendedLandingYardLine, 0, KickOutcomeType.TOUCHBACK)
+        }
+        if (ball.x !in 0f..FieldGeometry.WIDTH_YDS) {
+            return kickOutcome(kickLandingYardLine, "Kick out of bounds.", false, true, intendedLandingYardLine, kickLandingYardLine, KickOutcomeType.KICK_OUT_OF_BOUNDS)
+        }
 
-                ball.x < 0 || ball.x > FieldGeometry.WIDTH_YDS -> {
-                    KickResult(
-                        endYardLine = if (playType == PlayType.KICKOFF) Rules.KICKOFF_OUT_OF_BOUNDS_YARD_LINE else receivingYardLine,
-                        description = "Kick out of bounds.",
-                        isTouchback = false,
-                        isOutOfBounds = true,
-                    )
-                }
-
-                else -> {
-                    // Caught/landed in bounds -> resolve immediately with a flat return for prototype stability
-                    val endYardLine = (receivingYardLine + SIMPLIFIED_RETURN_YDS).coerceAtMost(Rules.FIELD_LENGTH_YDS - 1)
-                    KickResult(
-                        endYardLine = endYardLine,
-                        description = "Kick caught and returned to the $endYardLine.",
-                        isTouchback = false,
-                        isOutOfBounds = false,
-                    )
-                }
+        val returner = defense.find { it.slot == if (playType == PlayType.PUNT) "PR" else "KR" } ?: defense.minByOrNull { it.currentPos.distance2DTo(ball) }
+        val canField = returner != null && returner.currentPos.distance2DTo(ball) <= KICK_FIELDING_RADIUS_YDS
+        if (!canField) {
+            if (playType == PlayType.PUNT) {
+                val bounce = random.nextInt(-PUNT_BOUNCE_YDS, PUNT_BOUNCE_YDS + 1)
+                val spot = kickLandingYardLine + bounce
+                if (spot <= 0) return kickOutcome(0, "Punt bounces into the end zone. Touchback.", true, false, intendedLandingYardLine, kickLandingYardLine, KickOutcomeType.TOUCHBACK)
+                val downedSpot = spot.coerceAtMost(Rules.FIELD_LENGTH_YDS - 1)
+                return kickOutcome(downedSpot, "Punt bounces and is downed at the $downedSpot.", false, false, intendedLandingYardLine, kickLandingYardLine, KickOutcomeType.DOWNED)
             }
-        return PlayOutcome.Kick(result)
+            return kickOutcome(kickLandingYardLine, "Kick downed at the $kickLandingYardLine.", false, false, intendedLandingYardLine, kickLandingYardLine, KickOutcomeType.DOWNED)
+        }
+        if (playType == PlayType.PUNT && random.nextFloat() < PUNT_MUFF_CHANCE) {
+            val recoverer = (offense + defense).filter { it.currentPos.distance2DTo(ball) <= LOOSE_BALL_RECOVERY_RADIUS_YDS }.minByOrNull { it.currentPos.distance2DTo(ball) }
+                ?: (offense + defense).minByOrNull { it.currentPos.distance2DTo(ball) }
+            return kickOutcome(kickLandingYardLine, "Punt muffed and recovered!", false, false, intendedLandingYardLine, kickLandingYardLine, KickOutcomeType.MUFF_RECOVERED, recoverer?.isOffense == true)
+        }
+        if (playType == PlayType.PUNT && offense.any { it.currentPos.distance2DTo(ball) <= FAIR_CATCH_COVERAGE_RADIUS_YDS } && random.nextFloat() < FAIR_CATCH_CHANCE) {
+            return kickOutcome(kickLandingYardLine, "Fair catch at the $kickLandingYardLine.", false, false, intendedLandingYardLine, kickLandingYardLine, KickOutcomeType.FAIR_CATCH)
+        }
+        returner.currentPos = ball.copy(z = 0f)
+        kickReturner = returner
+        ballCarrier = returner
+        carrierVelocity = Vector3D(0f, 0f, 0f)
+        return null
     }
 
-    private fun tickFieldGoal(): PlayOutcome? {
+    private fun tickKickReturn(tickDeltaSec: Float): PlayOutcome? {
+        val returner = kickReturner ?: return null
+        val start = returner.currentPos
+        MovementEngine.pursue(returner, returner.currentPos.copy(y = returner.currentPos.y - direction * DOWNFIELD_TARGET_YDS), tickDeltaSec)
+        carrierVelocity = Vector3D((returner.currentPos.x - start.x) / tickDeltaSec, (returner.currentPos.y - start.y) / tickDeltaSec, 0f)
+        ballPosition = returner.currentPos
+
+        activateReturnBlocking(returner, tickDeltaSec)
+        for (coverPlayer in offense) {
+            if (coverPlayer === kicker || isReturnBlocked(coverPlayer)) continue
+            MovementEngine.intercept(coverPlayer, returner.currentPos, carrierVelocity, tickDeltaSec)
+        }
+
+        val yardLine = receivingYardLine(returner.currentPos)
+        val returnYards = (yardLine - kickLandingYardLine).coerceAtLeast(0)
+        if (yardLine >= Rules.FIELD_LENGTH_YDS) {
+            return kickOutcome(Rules.FIELD_LENGTH_YDS, "TOUCHDOWN! $returnYards-yard kick return!", false, false, outcomeType = KickOutcomeType.RETURN_TOUCHDOWN)
+        }
+        if (returner.currentPos.x !in 0f..FieldGeometry.WIDTH_YDS) {
+            return kickOutcome(yardLine, "Kick returned $returnYards yards out of bounds.", false, false, outcomeType = KickOutcomeType.RETURN_OUT_OF_BOUNDS)
+        }
+        for (coverPlayer in offense) {
+            if (isReturnBlocked(coverPlayer) || coverPlayer.currentPos.distance2DTo(returner.currentPos) >= TACKLE_RADIUS_YDS) continue
+            if (random.nextFloat() < tackleChance(coverPlayer, returner)) {
+                if (random.nextFloat() < RETURN_FUMBLE_CHANCE) {
+                    val recoverer = (offense + defense).filter { it.currentPos.distance2DTo(returner.currentPos) <= LOOSE_BALL_RECOVERY_RADIUS_YDS }
+                        .minByOrNull { it.currentPos.distance2DTo(returner.currentPos) } ?: coverPlayer
+                    return kickOutcome(yardLine, "Return fumble recovered!", false, false, outcomeType = KickOutcomeType.RETURN_FUMBLE_RECOVERED, recoveredByKickingTeam = recoverer.isOffense)
+                }
+                return kickOutcome(yardLine, "Kick returned $returnYards yards to the $yardLine.", false, false, outcomeType = KickOutcomeType.RETURN_TACKLED)
+            }
+            evadeTackle(returner, coverPlayer)
+        }
+        if (elapsedSec >= MAX_PLAY_DURATION_SEC) {
+            return kickOutcome(yardLine, "Kick return ends at the $yardLine.", false, false, outcomeType = KickOutcomeType.RETURN_TACKLED)
+        }
+        return null
+    }
+
+    private fun activateReturnBlocking(returner: RunningPlayer, tickDeltaSec: Float) {
+        for (blocker in defense) {
+            if (blocker === returner) continue
+            val coverPlayer = offense.filter { it !== kicker }.minByOrNull { it.currentPos.distance2DTo(blocker.currentPos) } ?: continue
+            if (coverPlayer.currentPos.distance2DTo(blocker.currentPos) <= RETURN_BLOCK_CONTACT_YDS) {
+                blocker.blockingId = coverPlayer.id
+            } else {
+                MovementEngine.pursue(blocker, coverPlayer.currentPos, tickDeltaSec)
+            }
+        }
+    }
+
+    private fun isReturnBlocked(player: RunningPlayer): Boolean = defense.any { it.blockingId == player.id }
+
+    private fun receivingYardLine(position: Vector3D): Int {
+        val kickingYardLine = if (snap.isAttackingUp) position.y else Rules.FIELD_LENGTH_YDS - position.y
+        return (Rules.FIELD_LENGTH_YDS - kickingYardLine).toInt().coerceIn(0, Rules.FIELD_LENGTH_YDS)
+    }
+
+    private fun kickOutcome(
+        endYardLine: Int,
+        description: String,
+        isTouchback: Boolean,
+        isOutOfBounds: Boolean,
+        intendedLandingYardLine: Int = receivingYardLine(intendedKickTarget ?: ballPosition!!),
+        landingYardLine: Int = kickLandingYardLine,
+        outcomeType: KickOutcomeType,
+        recoveredByKickingTeam: Boolean = false,
+    ) = PlayOutcome.Kick(
+        KickResult(
+            endYardLine = endYardLine,
+            description = description,
+            isTouchback = isTouchback,
+            isOutOfBounds = isOutOfBounds,
+            intendedLandingYardLine = intendedLandingYardLine,
+            landingYardLine = landingYardLine,
+            returnYards = (endYardLine - landingYardLine).coerceAtLeast(0),
+            outcomeType = outcomeType,
+            recoveredByKickingTeam = recoveredByKickingTeam,
+        ),
+    )
+
+    private fun tickFieldGoal(tickDeltaSec: Float): PlayOutcome? {
         val kicker = kicker ?: return whistleDead()
         if (ballTrajectory == null) {
-            ballPosition = kicker.currentPos
+            val contact = holder?.currentPos ?: kicker.currentPos.copy(y = losWorldY - Rules.FIELD_GOAL_SNAP_DEPTH_YDS * direction)
+            ballPosition = contact
+            MovementEngine.moveToward(kicker, contact, FIELD_GOAL_APPROACH_SPEED_YDS_PER_SEC, tickDeltaSec)
             if (elapsedSec < FIELD_GOAL_HOLD_SEC) return null
-            kickFieldGoal(kicker)
+            kickFieldGoal(kicker, contact)
         }
 
         val trajectory = ballTrajectory ?: return null
@@ -259,15 +426,18 @@ class PlaySimulator(
         return fieldGoalResult?.let { PlayOutcome.FieldGoal(it) }
     }
 
-    private fun kickFieldGoal(kicker: RunningPlayer) {
+    private fun kickFieldGoal(
+        kicker: RunningPlayer,
+        contact: Vector3D,
+    ) {
         val distance = Rules.fieldGoalDistance(snap.losYardLine)
         val kickPower = kicker.attributes.kickPower
         val range = AttributeTranslator.calculateFieldGoalRangeYards(kickPower)
         val isBlocked =
             defense.any {
-                (it.role == PlayerRole.PASS_RUSHER || it.role == PlayerRole.BLITZER) &&
+                    (it.role == PlayerRole.PASS_RUSHER || it.role == PlayerRole.BLITZER) &&
                     !isBlocked(it) &&
-                    it.currentPos.distance2DTo(kicker.currentPos) <= KICK_BLOCK_RADIUS_YDS
+                    it.currentPos.distance2DTo(contact) <= KICK_BLOCK_RADIUS_YDS
             }
         val isGood =
             !isBlocked && random.nextFloat() < AttributeTranslator.calculateFieldGoalMakeChance(distance, kickPower, kicker.attributes.kickAccuracy)
@@ -277,7 +447,7 @@ class PlaySimulator(
         val (target, description) =
             when {
                 isBlocked -> {
-                    kicker.currentPos.copy(y = kicker.currentPos.y + 3f * direction, z = 0f) to "The $distance-yard kick is BLOCKED!"
+                    contact.copy(y = contact.y + 3f * direction, z = 0f) to "The $distance-yard kick is BLOCKED!"
                 }
 
                 isGood -> {
@@ -285,7 +455,7 @@ class PlaySimulator(
                 }
 
                 distance > range -> {
-                    Vector3D(FieldGeometry.CENTER_X, kicker.currentPos.y + range * direction, 0f) to "The $distance-yard kick falls short."
+                    Vector3D(FieldGeometry.CENTER_X, contact.y + range * direction, 0f) to "The $distance-yard kick falls short."
                 }
 
                 else -> {
@@ -301,9 +471,9 @@ class PlaySimulator(
         throwTimeSec = elapsedSec
         ballTrajectory =
             BallTrajectory(
-                startPos = kicker.currentPos,
+                startPos = contact,
                 targetPos = target,
-                totalFlightTimeSec = (kicker.currentPos.distance2DTo(target) / KICK_SPEED_YDS_PER_SEC).coerceAtLeast(MIN_KICK_FLIGHT_SEC),
+                totalFlightTimeSec = (contact.distance2DTo(target) / KICK_SPEED_YDS_PER_SEC).coerceAtLeast(MIN_KICK_FLIGHT_SEC),
                 apexHeightYards = if (isBlocked) 1f else FIELD_GOAL_APEX_YDS,
             )
     }
@@ -652,7 +822,18 @@ class PlaySimulator(
     companion object {
         const val MAX_PLAY_DURATION_SEC = 15f // Safety timeout
         private const val KICK_APEX_YDS = 30f
-        private const val SIMPLIFIED_RETURN_YDS = 15
+        private const val PUNT_BLOCK_RADIUS_YDS = 1.5f
+        private const val KICK_FIELDING_RADIUS_YDS = 12f
+        private const val PUNT_BOUNCE_YDS = 9
+        private const val LOOSE_BALL_RECOVERY_RADIUS_YDS = 5f
+        private const val FAIR_CATCH_COVERAGE_RADIUS_YDS = 12f
+        private const val FAIR_CATCH_CHANCE = 0.75f
+        private const val PUNT_MUFF_CHANCE = 0.04f
+        private const val RETURN_FUMBLE_CHANCE = 0.015f
+        private const val KICK_OPERATION_SEC = 0.65f
+        private const val KICK_APPROACH_YDS = 4f
+        private const val KICK_COVERAGE_SPRINT_YDS = 80f
+        private const val RETURN_BLOCK_CONTACT_YDS = 1.2f
         private const val TACKLE_RADIUS_YDS = 1.6f
         private const val BASE_TACKLE_CHANCE = 0.88f
         private const val ENGAGED_TACKLE_RADIUS_YDS = 1.2f
@@ -685,11 +866,18 @@ class PlaySimulator(
         private const val FUMBLE_CHANCE = 0.012f
         private const val STRIP_SACK_CHANCE = 0.1f
         private const val FIELD_GOAL_HOLD_SEC = 1.3f
+        private const val FIELD_GOAL_APPROACH_SPEED_YDS_PER_SEC = 5f
         private const val FIELD_GOAL_APEX_YDS = 10f
         private const val KICK_SPEED_YDS_PER_SEC = 25f
         private const val MIN_KICK_FLIGHT_SEC = 0.4f
         private const val KICK_BLOCK_RADIUS_YDS = 1.5f
         private const val CROSSBAR_HEIGHT_YDS = 3.33f
         private const val GOAL_POSTS_HALF_WIDTH_YDS = 3.08f
+    }
+
+    private enum class KickPhase {
+        OPERATION,
+        FLIGHT,
+        RETURN,
     }
 }

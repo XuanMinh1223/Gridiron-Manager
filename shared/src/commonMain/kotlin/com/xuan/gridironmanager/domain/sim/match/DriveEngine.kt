@@ -39,7 +39,19 @@ class DriveEngine {
     ): GameState {
         require(outcome is PlayOutcome.Kick) { "Only a kick can follow a kickoff, got $outcome" }
         val result = outcome.result
-        return changeOfPossession(state, if (result.isTouchback) Rules.KICKOFF_TOUCHBACK_YARD_LINE else result.endYardLine)
+        require(result.outcomeType != KickOutcomeType.BLOCKED_RECOVERED && result.outcomeType != KickOutcomeType.FAIR_CATCH) { "Invalid free-kick outcome: ${result.outcomeType}" }
+        if (result.outcomeType == KickOutcomeType.RETURN_TOUCHDOWN) return scoreKickReturnTouchdown(state)
+        val spot =
+            when (result.outcomeType) {
+                KickOutcomeType.LANDING_ZONE_TOUCHBACK -> Rules.LANDING_ZONE_TOUCHBACK_YARD_LINE
+                KickOutcomeType.TOUCHBACK -> Rules.KICKOFF_TOUCHBACK_YARD_LINE
+                KickOutcomeType.KICK_OUT_OF_BOUNDS, KickOutcomeType.SHORT_KICK -> {
+                    val penaltySpot = if (state.isSafetyFreeKick) Rules.SAFETY_KICK_OUT_OF_BOUNDS_YARD_LINE else Rules.KICKOFF_OUT_OF_BOUNDS_YARD_LINE
+                    maxOf(penaltySpot, result.endYardLine)
+                }
+                else -> result.endYardLine
+            }
+        return if (result.recoveredByKickingTeam && spot == 0) scoreTouchdown(state) else if (result.recoveredByKickingTeam) retainPossession(state, Rules.FIELD_LENGTH_YDS - spot) else changeOfPossession(state, spot)
     }
 
     private fun resolveExtraPoint(
@@ -64,7 +76,12 @@ class DriveEngine {
             // Punt
             is PlayOutcome.Kick -> {
                 val result = outcome.result
-                changeOfPossession(state, if (result.isTouchback) Rules.PUNT_TOUCHBACK_YARD_LINE else result.endYardLine)
+                when {
+                    result.outcomeType == KickOutcomeType.RETURN_TOUCHDOWN -> scoreKickReturnTouchdown(state)
+                    result.recoveredByKickingTeam && result.endYardLine == 0 -> scoreTouchdown(state)
+                    result.recoveredByKickingTeam -> retainPossession(state, Rules.FIELD_LENGTH_YDS - result.endYardLine)
+                    else -> changeOfPossession(state, if (result.isTouchback) Rules.PUNT_TOUCHBACK_YARD_LINE else result.endYardLine)
+                }
             }
 
             is PlayOutcome.FieldGoal -> {
@@ -116,6 +133,7 @@ class DriveEngine {
                         distance = Rules.FIRST_DOWN_DISTANCE,
                         yardLine = Rules.SAFETY_KICK_YARD_LINE,
                         phase = GamePhase.KICKOFF,
+                        isSafetyFreeKick = true,
                     )
                 }
 
@@ -162,6 +180,9 @@ class DriveEngine {
             phase = GamePhase.EXTRA_POINT,
         )
 
+    /** A kick return scores for the receiving team, which then owns the try. */
+    private fun scoreKickReturnTouchdown(state: GameState): GameState = scoreTouchdown(state.copy(isHomePossession = !state.isHomePossession))
+
     /** The possessing team kicks off, as it does after scoring. */
     private fun kickoffBy(state: GameState): GameState =
         state.copy(
@@ -169,6 +190,7 @@ class DriveEngine {
             distance = Rules.FIRST_DOWN_DISTANCE,
             yardLine = Rules.KICKOFF_YARD_LINE,
             phase = GamePhase.KICKOFF,
+            isSafetyFreeKick = false,
         )
 
     private fun addPoints(
@@ -193,7 +215,11 @@ class DriveEngine {
             yardLine = yardLine,
             isHomePossession = !state.isHomePossession,
             phase = GamePhase.SCRIMMAGE,
+            isSafetyFreeKick = false,
         )
+
+    private fun retainPossession(state: GameState, yardLine: Int): GameState =
+        state.copy(down = 1, distance = firstDownDistance(yardLine), yardLine = yardLine, phase = GamePhase.SCRIMMAGE, isSafetyFreeKick = false)
 
     /** Rolls the quarter over once the clock expires, handling halftime and the end of the game. */
     private fun advanceClock(state: GameState): GameState {
@@ -214,6 +240,7 @@ class DriveEngine {
                 yardLine = Rules.KICKOFF_YARD_LINE,
                 isHomePossession = false,
                 phase = GamePhase.KICKOFF,
+                isSafetyFreeKick = false,
             )
         } else {
             rolledOver

@@ -49,11 +49,14 @@ object SnapBuilder {
         val defenseAnchorWorldY =
             if (unit.formation.type == FormationType.KICK_RETURN) FieldGeometry.toWorldY(KICK_RETURN_ANCHOR_YARD_LINE, isAttackingUp) else losWorldY
         val defense = buildDefense(defenseRoster, unit, defenseAnchorWorldY, isAttackingUp, offense)
+        val specialTeamsDefense =
+            if (offensivePlay.type == PlayType.PUNT) defense.map { if (it.slot in setOf("LDE", "LDT", "RDT", "RDE")) it.copy(role = PlayerRole.PASS_RUSHER) else it }
+            else defense
 
         val offenseBySlot = offense.associateBy { it.slot }
         return Snap(
             offense = offense,
-            defense = defense,
+            defense = specialTeamsDefense,
             playType = offensivePlay.type,
             losYardLine = losYardLine,
             isAttackingUp = isAttackingUp,
@@ -78,8 +81,9 @@ object SnapBuilder {
                     }
 
                     play.type == PlayType.KICKOFF || play.type == PlayType.PUNT -> {
-                        // Coverage team sprints downfield
-                        Route("Coverage", listOf(Waypoint(start.x, start.y + KICK_COVERAGE_SPRINT_YDS * direction)))
+                        // Kick movement is controlled by PlaySimulator. Receiving players remain
+                        // anchored until the ball is fielded; coverage routes begin after contact.
+                        null
                     }
 
                     else -> {
@@ -153,13 +157,7 @@ object SnapBuilder {
                         else -> PlayerRole.MAN_COVERAGE
                     }
                 val route =
-                    if (formationType == FormationType.PUNT_RETURN) {
-                        // Front line rushes the punter, everyone else drops back to block for the returner
-                        val move = if (node.yOffset < 3f) -10f else 5f
-                        Route("Return", listOf(Waypoint(start.x, start.y + move * direction)))
-                    } else {
-                        null
-                    }
+                    null
                 player.toRunningPlayer(route).copy(
                     id = "${node.slot}_${player.id}",
                     currentPos = start,

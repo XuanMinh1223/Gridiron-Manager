@@ -53,6 +53,13 @@ object AttributeTranslator {
         return 30.0f + (rating / 99.0f) * 45.0f
     }
 
+    /** Placement error in yards. Accurate kickers produce a much tighter landing distribution. */
+    fun calculateKickPlacementError(kickAccuracy: Int, kickDistanceYards: Float): Float {
+        val rating = kickAccuracy.coerceIn(0, 99).toFloat()
+        val variance = 9.0f - (rating / 99.0f) * 7.5f
+        return variance * (kickDistanceYards / 50.0f).coerceAtLeast(0.5f)
+    }
+
     /**
      * Maps kick power (0-99) to hangtime in seconds.
      * 99 = 5.2s
