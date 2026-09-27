@@ -381,6 +381,28 @@ class PlaySimulatorTest {
     }
 
     @Test
+    fun testQuickSlantsCover2DefendersCloseAfterCatch() {
+        for (seed in 0 until 100) {
+            val snap = SnapBuilder.build(GameState(yardLine = 40), matchup, Playbook.QUICK_SLANTS, Playbook.COVER_2)
+            val simulator = PlaySimulator(snap, Random(seed))
+            repeat(250) {
+                val outcome = simulator.tick(tick)
+                val carrier = simulator.ballPosition
+                if (carrier != null && snap.offense.any { it.role == PlayerRole.RECEIVER && it.currentPos.distance2DTo(carrier) < 0.01f }) {
+                    for (defender in snap.defense.filter { it.role == PlayerRole.ZONE_COVERAGE }) {
+                        val before = defender.currentPos.distance2DTo(carrier)
+                        if (outcome == null) simulator.tick(tick)
+                        val after = defender.currentPos.distance2DTo(carrier)
+                        assertTrue(after <= before + defender.speedYdsPerSec * tick, "${defender.slot} moved away from carrier by ${after - before}")
+                    }
+                    return@repeat
+                }
+                if (outcome != null) return@repeat
+            }
+        }
+    }
+
+    @Test
     fun testEveryScrimmagePlayFinishesAgainstEveryDefense() {
         for (play in Playbook.scrimmagePlays) {
             for (call in Playbook.defensiveCalls) {
