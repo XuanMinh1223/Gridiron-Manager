@@ -336,7 +336,6 @@ class PlaySimulator(
         carrierVelocity = Vector3D((returner.currentPos.x - start.x) / tickDeltaSec, (returner.currentPos.y - start.y) / tickDeltaSec, 0f)
         ballPosition = returner.currentPos
 
-        if (playType == PlayType.KICKOFF) moveCoverage(kicker ?: return whistleDead(), tickDeltaSec)
         activateReturnBlocking(returner, tickDeltaSec)
         for (coverPlayer in offense) {
             if (coverPlayer === kicker || isReturnBlocked(coverPlayer)) continue
@@ -353,6 +352,7 @@ class PlaySimulator(
         }
         for (coverPlayer in offense) {
             if (isReturnBlocked(coverPlayer) || coverPlayer.currentPos.distance2DTo(returner.currentPos) >= TACKLE_RADIUS_YDS) continue
+            if ((recoveringUntilSec[coverPlayer.id] ?: 0f) > elapsedSec) continue
             if (random.nextFloat() < tackleChance(coverPlayer, returner)) {
                 if (random.nextFloat() < RETURN_FUMBLE_CHANCE) {
                     val recoverer = (offense + defense).filter { it.currentPos.distance2DTo(returner.currentPos) <= LOOSE_BALL_RECOVERY_RADIUS_YDS }

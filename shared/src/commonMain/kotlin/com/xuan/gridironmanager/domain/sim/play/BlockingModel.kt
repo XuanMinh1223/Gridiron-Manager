@@ -43,7 +43,7 @@ class BlockingModel(
             available.remove(blocker)
             val block = Block(blocker, defender, winRatePerSec(blocker, defender, random))
             // Linemen facing each other across the line are engaged from the snap
-            if (blocker.currentPos.distance2DTo(defender.currentPos) <= LINE_CONTACT_YDS) {
+            if (blocker.currentPos.distance2DTo(defender.currentPos) <= CONTACT_YDS) {
                 block.isEngaged = true
                 blocker.blockingId = defender.id
             }
@@ -146,7 +146,6 @@ class BlockingModel(
 
     private companion object {
         const val CONTACT_YDS = 1.2f
-        const val LINE_CONTACT_YDS = 2.5f
         const val DRIVE_SPEED_YDS_PER_SEC = 0.8f
         const val DOUBLE_TEAM_FACTOR = 0.8f
         const val SECOND_LEVEL_REACH_YDS = 8f

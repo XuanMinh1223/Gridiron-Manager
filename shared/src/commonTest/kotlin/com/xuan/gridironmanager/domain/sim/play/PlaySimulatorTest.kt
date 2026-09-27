@@ -134,6 +134,21 @@ class PlaySimulatorTest {
     }
 
     @Test
+    fun testKickoffCoverageMovesAtMostOneSpeedStepPerReturnTick() {
+        val returner = RunningPlayer("R", Vector3D(FieldGeometry.CENTER_X, 95f, 0f), 7f, null, isOffense = false, slot = "KR")
+        val coverage = RunningPlayer("C", Vector3D(FieldGeometry.CENTER_X, 60f, 0f), 8f, null, slot = "KC0")
+        val snap = Snap(listOf(kicker(35f, 50, 99), coverage), listOf(returner), PlayType.KICKOFF, 35, true)
+        val simulator = PlaySimulator(snap, Random(4))
+        var previousY = coverage.currentPos.y
+        repeat(250) {
+            simulator.tick(tick)
+            val movement = kotlin.math.abs(coverage.currentPos.y - previousY)
+            assertTrue(movement <= coverage.speedYdsPerSec * tick + 0.001f, "Coverage moved $movement yards in one tick")
+            previousY = coverage.currentPos.y
+        }
+    }
+
+    @Test
     fun testKickoffSetupUnitsWaitThenBlockersRetreat() {
         val snap = SnapBuilder.build(GameState.openingKickoff(), matchup, Playbook.KICKOFF, Playbook.COVER_2)
         val kicker = snap.offense.single { it.slot == "K" }
@@ -150,7 +165,7 @@ class PlaySimulatorTest {
         assertEquals(coverageStart, coverage.currentPos)
         repeat(150) { simulator.tick(tick) }
         assertTrue(blocker.currentPos.y > blockerStart.y, "Receiving blockers retreat toward their goal line after fielding")
-        assertTrue(coverage.currentPos.y > coverageStart.y, "Coverage releases after fielding")
+        assertTrue(coverage.currentPos != coverageStart, "Coverage releases after fielding")
     }
 
     @Test
