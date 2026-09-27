@@ -90,6 +90,33 @@ class PlaySimulatorTest {
     }
 
     @Test
+    fun testKickoffReturnerTracksBallWhileSetupPlayersWait() {
+        val snap = SnapBuilder.build(GameState.openingKickoff(), matchup, Playbook.KICKOFF, Playbook.BASE_MAN)
+        val returner = snap.defense.single { it.slot == "KR" }
+        val blocker = snap.defense.first { it.slot?.startsWith("KRB") == true }
+        val coverage = snap.offense.first { it.slot?.startsWith("KC") == true }
+        val start = returner.currentPos
+        val blockerStart = blocker.currentPos
+        val coverageStart = coverage.currentPos
+        val simulator = PlaySimulator(snap, Random(4))
+        repeat(40) { simulator.tick(tick) }
+
+        assertTrue(returner.currentPos != start, "Deep returner should track the descending kickoff")
+        assertEquals(blockerStart, blocker.currentPos)
+        assertEquals(coverageStart, coverage.currentPos)
+    }
+
+    @Test
+    fun testUnfieldedKickAtGoalLineIsNotDownedAtZero() {
+        val snap = Snap(listOf(kicker(35f, kickPower = 77, kickAccuracy = 99)), emptyList(), PlayType.KICKOFF, 35, true)
+        val results = (0 until 200).map { seed -> assertIs<PlayOutcome.Kick>(run(PlaySimulator(snap, Random(seed)))).result }
+        val atGoalLine = results.filter { it.landingYardLine == 0 }
+
+        assertTrue(atGoalLine.isNotEmpty())
+        assertTrue(atGoalLine.all { it.isTouchback && it.outcomeType != KickOutcomeType.DOWNED })
+    }
+
+    @Test
     fun testKickReturnRunsForMultipleTicksAndMovesReturner() {
         val returner =
             RunningPlayer(
@@ -116,7 +143,7 @@ class PlaySimulatorTest {
 
     @Test
     fun testKickoffBlockersMoveAndEngageAfterFielding() {
-        val returner = RunningPlayer("R", Vector3D(FieldGeometry.CENTER_X, 95f, 0f), 7f, null, isOffense = false, slot = "KR")
+        val returner = RunningPlayer("R", Vector3D(FieldGeometry.CENTER_X, 88f, 0f), 7f, null, isOffense = false, slot = "KR")
         val blocker = RunningPlayer("B", Vector3D(FieldGeometry.CENTER_X, 67f, 0f), 8f, null, isOffense = false, slot = "KRB0")
         val coverage = RunningPlayer("C", Vector3D(FieldGeometry.CENTER_X, 35f, 0f), 8f, null, slot = "KC0")
         val snap = Snap(listOf(kicker(35f, 50, 99), coverage), listOf(returner, blocker), PlayType.KICKOFF, 35, true)
@@ -194,6 +221,37 @@ class PlaySimulatorTest {
     }
 
     @Test
+    fun testPuntReturnUnitTracksLandingAndGunnersDuringFlight() {
+        val snap = SnapBuilder.build(GameState(yardLine = 35), matchup, Playbook.PUNT, Playbook.BASE_MAN)
+        val returner = snap.defense.single { it.slot == "PR" }
+        val vice = snap.defense.single { it.slot == "VL" }
+        val laneBlocker = snap.defense.single { it.slot == "S" }
+        val frontLineman = snap.defense.first { it.role == PlayerRole.PASS_RUSHER }
+        val returnerStart = returner.currentPos
+        val viceStart = vice.currentPos
+        val laneStart = laneBlocker.currentPos
+        val frontStart = frontLineman.currentPos
+        val simulator = PlaySimulator(snap, Random(4))
+
+        repeat(25) { simulator.tick(tick) }
+
+        assertTrue(returner.currentPos != returnerStart, "Punt returner should track the kick during flight")
+        assertTrue(vice.currentPos != viceStart, "Vice should track the gunner during flight")
+        assertTrue(laneBlocker.currentPos != laneStart, "Return blockers should drop into lanes during flight")
+        assertTrue(frontLineman.currentPos != frontStart, "Punt front line should drop into return lanes during flight")
+    }
+
+    @Test
+    fun testPuntReturnerDoesNotTeleportToLandingSpot() {
+        val returner = RunningPlayer("PR", Vector3D(FieldGeometry.CENTER_X, 75f, 0f), 0f, null, isOffense = false, slot = "PR")
+        val snap = Snap(listOf(kicker(35f, 40, 99)), listOf(returner), PlayType.PUNT, 50, true)
+        val result = assertIs<PlayOutcome.Kick>(run(PlaySimulator(snap, Random(4)))).result
+
+        assertEquals(75f, returner.currentPos.y)
+        assertTrue(result.outcomeType == KickOutcomeType.DOWNED || result.outcomeType == KickOutcomeType.TOUCHBACK)
+    }
+
+    @Test
     fun testSeededPuntFairCatchAndMuffAreTyped() {
         fun punt(seed: Int): KickOutcomeType {
             val receiver = RunningPlayer("PR", Vector3D(FieldGeometry.CENTER_X, 81f, 0f), 8f, null, isOffense = false, slot = "PR")
@@ -249,6 +307,29 @@ class PlaySimulatorTest {
         val outcome = run(PlaySimulator(snap))
 
         assertEquals("Play whistled dead.", outcome.description)
+    }
+
+    @Test
+    fun testReceiverCutsAlongBackOfEndZoneAndManDefenderFollows() {
+        for (attackingUp in listOf(true, false)) {
+            val direction = if (attackingUp) 1f else -1f
+            val backLine = if (attackingUp) 109f else -9f
+            val quarterback = RunningPlayer("QB", Vector3D(FieldGeometry.CENTER_X, if (attackingUp) 90f else 10f, 0f), 0f, null, role = PlayerRole.PASSER)
+            val receiver = RunningPlayer(
+                "WR", Vector3D(10f, backLine - direction, 0f), 8f,
+                Route("Fade", listOf(Waypoint(10f, backLine + direction * 20f))), role = PlayerRole.RECEIVER,
+            )
+            val defender = RunningPlayer("CB", Vector3D(10f, backLine - 2f * direction, 0f), 8f, null, isOffense = false, role = PlayerRole.MAN_COVERAGE, coverageTargetId = "WR")
+            val simulator = PlaySimulator(Snap(listOf(quarterback, receiver), listOf(defender), PlayType.PASS, 90, attackingUp, listOf("WR")), Random(3))
+            repeat(4) { simulator.tick(tick) }
+            val beforeCutX = receiver.currentPos.x
+            val beforeDefenderX = defender.currentPos.x
+            repeat(5) { simulator.tick(tick) }
+
+            assertEquals(backLine, receiver.currentPos.y, 0.001f)
+            assertTrue(receiver.currentPos.x > beforeCutX, "Receiver should cross the back of the end zone")
+            assertTrue(defender.currentPos.x > beforeDefenderX, "Man defender should follow the crossing receiver")
+        }
     }
 
     @Test

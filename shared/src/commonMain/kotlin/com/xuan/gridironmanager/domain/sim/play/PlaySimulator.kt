@@ -69,6 +69,7 @@ class PlaySimulator(
     private var kickContactSec = 0f
     private var kickLandingYardLine = 0
     private var kickReturner: RunningPlayer? = null
+    private val endZoneBreakByReceiver = mutableMapOf<String, Float>()
     private val kickoffBlockerStartY = if (playType == PlayType.KICKOFF) defense.associate { it.id to it.currentPos.y } else emptyMap()
     private var carrierVelocity = Vector3D(0f, 0f, 0f)
     private val defenderTracking = mutableMapOf<String, DefenderTrackingState>()
@@ -150,7 +151,12 @@ class PlaySimulator(
             }
 
             KickPhase.FLIGHT -> {
-                if (playType == PlayType.PUNT) moveCoverage(kicker, tickDeltaSec)
+                if (playType == PlayType.PUNT) {
+                    moveCoverage(kicker, tickDeltaSec)
+                    movePuntReturnUnit(tickDeltaSec)
+                } else {
+                    moveKickoffReturner(tickDeltaSec)
+                }
                 val trajectory = ballTrajectory ?: return null
                 if (elapsedSec - kickContactSec < trajectory.totalFlightTimeSec) {
                     ballPosition = trajectory.getPositionAt(elapsedSec - kickContactSec)
@@ -188,15 +194,66 @@ class PlaySimulator(
         }
     }
 
+    private fun movePuntReturnUnit(tickDeltaSec: Float) {
+        val returner = defense.find { it.slot == "PR" } ?: return
+        val landing = ballTrajectory?.targetPos ?: return
+        val legalLanding = landing.copy(
+            x = landing.x.coerceIn(0f, FieldGeometry.WIDTH_YDS),
+            y = FieldGeometry.clampInsideEndLines(landing.y),
+            z = 0f,
+        )
+        MovementEngine.pursue(returner, legalLanding, tickDeltaSec)
+
+        // The outside vices contain gunners while the front line and safeties drop into return lanes.
+        for (blocker in defense.filter { it !== returner }) {
+            val gunner = when (blocker.slot) {
+                "VL" -> offense.find { it.slot == "GL" }
+                "VR" -> offense.find { it.slot == "GR" }
+                else -> null
+            }
+            val target = gunner?.currentPos ?: legalLanding.copy(x = blocker.currentPos.x, y = legalLanding.y - direction * PUNT_RETURN_LANE_DEPTH_YDS)
+            MovementEngine.pursue(blocker, target, tickDeltaSec)
+        }
+    }
+
+    private fun moveKickoffReturner(tickDeltaSec: Float) {
+        val returner = defense.find { it.slot == "KR" } ?: return
+        val landing = ballTrajectory?.targetPos ?: return
+        if (landing.x !in 0f..FieldGeometry.WIDTH_YDS) return
+        MovementEngine.pursue(
+            returner,
+            landing.copy(y = FieldGeometry.clampInsideEndLines(landing.y), z = 0f),
+            tickDeltaSec,
+        )
+    }
+
     private fun moveOffense(tickDeltaSec: Float) {
         val runAfterCatch = ballCarrier?.takeIf { playType == PlayType.PASS }
         if (runAfterCatch == null) {
-            MovementEngine.updatePositions(offense, tickDeltaSec)
+            movePassReceivers(tickDeltaSec)
             return
         }
-        MovementEngine.updatePositions(offense.filter { it !== runAfterCatch }, tickDeltaSec)
+        movePassReceivers(tickDeltaSec, runAfterCatch)
         // Turn upfield and head for the end zone
         MovementEngine.pursue(runAfterCatch, runAfterCatch.currentPos.copy(y = runAfterCatch.currentPos.y + DOWNFIELD_TARGET_YDS * direction), tickDeltaSec)
+    }
+
+    private fun movePassReceivers(tickDeltaSec: Float, carrier: RunningPlayer? = null) {
+        if (playType != PlayType.PASS) {
+            MovementEngine.updatePositions(offense.filter { it !== carrier }, tickDeltaSec)
+            return
+        }
+        val backLineY = if (snap.isAttackingUp) Rules.FIELD_LENGTH_YDS + Rules.END_ZONE_DEPTH_YDS - END_ZONE_BACKLINE_MARGIN_YDS else -Rules.END_ZONE_DEPTH_YDS + END_ZONE_BACKLINE_MARGIN_YDS
+        MovementEngine.updatePositions(offense.filter { it !== carrier && it.role != PlayerRole.RECEIVER }, tickDeltaSec)
+        for (receiver in offense.filter { it.role == PlayerRole.RECEIVER && it !== carrier }) {
+            val breakDirection = endZoneBreakByReceiver[receiver.id]
+            if (breakDirection == null) MovementEngine.updatePositions(listOf(receiver), tickDeltaSec)
+            if (breakDirection == null && (receiver.currentPos.y - backLineY) * direction < 0f) continue
+            val lateralDirection = breakDirection ?: if (receiver.currentPos.x <= FieldGeometry.CENTER_X) 1f else -1f
+            endZoneBreakByReceiver[receiver.id] = lateralDirection
+            receiver.currentPos = receiver.currentPos.copy(y = backLineY)
+            if (breakDirection != null) MovementEngine.pursue(receiver, receiver.currentPos.copy(x = FieldGeometry.CENTER_X + lateralDirection * END_ZONE_CROSS_TARGET_YDS), tickDeltaSec)
+        }
     }
 
     private fun moveDefense(tickDeltaSec: Float) {
@@ -312,6 +369,9 @@ class PlaySimulator(
                 val downedSpot = spot.coerceAtMost(Rules.FIELD_LENGTH_YDS - 1)
                 return kickOutcome(downedSpot, "Punt bounces and is downed at the $downedSpot.", false, false, intendedLandingYardLine, kickLandingYardLine, KickOutcomeType.DOWNED)
             }
+            if (kickLandingYardLine == 0) {
+                return kickOutcome(0, "Kick reaches the goal line untouched. Touchback.", true, false, intendedLandingYardLine, 0, KickOutcomeType.LANDING_ZONE_TOUCHBACK)
+            }
             return kickOutcome(kickLandingYardLine, "Kick downed at the $kickLandingYardLine.", false, false, intendedLandingYardLine, kickLandingYardLine, KickOutcomeType.DOWNED)
         }
         if (playType == PlayType.PUNT && random.nextFloat() < PUNT_MUFF_CHANCE) {
@@ -322,7 +382,8 @@ class PlaySimulator(
         if (playType == PlayType.PUNT && offense.any { it.currentPos.distance2DTo(ball) <= FAIR_CATCH_COVERAGE_RADIUS_YDS } && random.nextFloat() < FAIR_CATCH_CHANCE) {
             return kickOutcome(kickLandingYardLine, "Fair catch at the $kickLandingYardLine.", false, false, intendedLandingYardLine, kickLandingYardLine, KickOutcomeType.FAIR_CATCH)
         }
-        returner.currentPos = ball.copy(z = 0f)
+        // The returner must actually reach the ball; a distant catch cannot teleport them to it.
+        returner.currentPos = returner.currentPos.copy(z = 0f)
         kickReturner = returner
         ballCarrier = returner
         carrierVelocity = Vector3D(0f, 0f, 0f)
@@ -836,8 +897,10 @@ class PlaySimulator(
     companion object {
         const val MAX_PLAY_DURATION_SEC = 15f // Safety timeout
         private const val KICK_APEX_YDS = 30f
+        private const val END_ZONE_BACKLINE_MARGIN_YDS = 1f
+        private const val END_ZONE_CROSS_TARGET_YDS = 15f
         private const val PUNT_BLOCK_RADIUS_YDS = 1.5f
-        private const val KICK_FIELDING_RADIUS_YDS = 12f
+        private const val KICK_FIELDING_RADIUS_YDS = 1.5f
         private const val PUNT_BOUNCE_YDS = 9
         private const val LOOSE_BALL_RECOVERY_RADIUS_YDS = 5f
         private const val FAIR_CATCH_COVERAGE_RADIUS_YDS = 12f
@@ -847,6 +910,7 @@ class PlaySimulator(
         private const val KICK_OPERATION_SEC = 0.65f
         private const val KICK_APPROACH_YDS = 4f
         private const val KICK_COVERAGE_SPRINT_YDS = 80f
+        private const val PUNT_RETURN_LANE_DEPTH_YDS = 12f
         private const val RETURN_BLOCK_CONTACT_YDS = 2.5f
         private const val KICKOFF_BLOCKER_RETREAT_YDS = 3f
         private const val RETURN_BLOCK_THREAT_WEIGHT = 0.5f
