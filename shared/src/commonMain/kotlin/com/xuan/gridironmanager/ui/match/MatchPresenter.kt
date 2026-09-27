@@ -125,7 +125,9 @@ class MatchPresenter(
             } while (outcome == null)
 
             val nextState = simulator.resolve(state, outcome, play.elapsedSec)
-            val summary = "${outcome.description} (${offensivePlay.name} vs ${defensiveCall.name})"
+            val summary =
+                if (state.phase == GamePhase.KICKOFF) outcome.description
+                else "${outcome.description} (${offensivePlay.name} vs ${defensiveCall.name})"
             _uiState.update {
                 it.copy(
                     gameState = nextState,

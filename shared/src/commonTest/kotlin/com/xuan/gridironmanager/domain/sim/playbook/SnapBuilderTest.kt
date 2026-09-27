@@ -113,6 +113,18 @@ class SnapBuilderTest {
     }
 
     @Test
+    fun testKickoffSetupUnitsLineUpFiveYardsApart() {
+        for (homeKicking in listOf(true, false)) {
+            val snap = SnapBuilder.build(homeBall.copy(yardLine = Rules.KICKOFF_YARD_LINE, isHomePossession = homeKicking), matchup, Playbook.KICKOFF, Playbook.COVER_2)
+            val direction = if (homeKicking) 1f else -1f
+            val kickerY = snap.offense.single { it.slot == "K" }.currentPos.y
+            assertEquals(Rules.KICKOFF_YARD_LINE.toFloat(), if (homeKicking) kickerY else Rules.FIELD_LENGTH_YDS - kickerY)
+            assertTrue(snap.offense.filter { it.slot?.startsWith("KC") == true }.all { (it.currentPos.y - kickerY) * direction == 25f })
+            assertTrue(snap.defense.filter { it.slot?.startsWith("KRB") == true }.all { (it.currentPos.y - kickerY) * direction == 30f })
+        }
+    }
+
+    @Test
     fun testPuntReturnerLinesUpDownfield() {
         val snap = SnapBuilder.build(homeBall, matchup, Playbook.PUNT, Playbook.COVER_2)
 

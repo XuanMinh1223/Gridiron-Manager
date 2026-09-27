@@ -69,6 +69,7 @@ class PlaySimulator(
     private var kickContactSec = 0f
     private var kickLandingYardLine = 0
     private var kickReturner: RunningPlayer? = null
+    private val kickoffBlockerStartY = if (playType == PlayType.KICKOFF) defense.associate { it.id to it.currentPos.y } else emptyMap()
     private var carrierVelocity = Vector3D(0f, 0f, 0f)
     private val defenderTracking = mutableMapOf<String, DefenderTrackingState>()
 
@@ -149,7 +150,7 @@ class PlaySimulator(
             }
 
             KickPhase.FLIGHT -> {
-                moveCoverage(kicker, tickDeltaSec)
+                if (playType == PlayType.PUNT) moveCoverage(kicker, tickDeltaSec)
                 val trajectory = ballTrajectory ?: return null
                 if (elapsedSec - kickContactSec < trajectory.totalFlightTimeSec) {
                     ballPosition = trajectory.getPositionAt(elapsedSec - kickContactSec)
@@ -335,6 +336,7 @@ class PlaySimulator(
         carrierVelocity = Vector3D((returner.currentPos.x - start.x) / tickDeltaSec, (returner.currentPos.y - start.y) / tickDeltaSec, 0f)
         ballPosition = returner.currentPos
 
+        if (playType == PlayType.KICKOFF) moveCoverage(kicker ?: return whistleDead(), tickDeltaSec)
         activateReturnBlocking(returner, tickDeltaSec)
         for (coverPlayer in offense) {
             if (coverPlayer === kicker || isReturnBlocked(coverPlayer)) continue
@@ -368,13 +370,25 @@ class PlaySimulator(
     }
 
     private fun activateReturnBlocking(returner: RunningPlayer, tickDeltaSec: Float) {
-        for (blocker in defense) {
-            if (blocker === returner) continue
-            val coverPlayer = offense.filter { it !== kicker }.minByOrNull { it.currentPos.distance2DTo(blocker.currentPos) } ?: continue
-            if (coverPlayer.currentPos.distance2DTo(blocker.currentPos) <= RETURN_BLOCK_CONTACT_YDS) {
-                blocker.blockingId = coverPlayer.id
-            } else {
-                MovementEngine.pursue(blocker, coverPlayer.currentPos, tickDeltaSec)
+        val availableCoverage = offense.filter { it !== kicker }.toMutableList()
+        for (blocker in defense.filter { it !== returner }.sortedBy { it.currentPos.distance2DTo(returner.currentPos) }) {
+            if (playType == PlayType.KICKOFF) {
+                val retreatY = kickoffBlockerStartY.getValue(blocker.id) + direction * KICKOFF_BLOCKER_RETREAT_YDS
+                if ((retreatY - blocker.currentPos.y) * direction > 0.05f) {
+                    blocker.blockingId = null
+                    MovementEngine.pursue(blocker, blocker.currentPos.copy(y = retreatY), tickDeltaSec)
+                    continue
+                }
+            }
+            val coverPlayer = availableCoverage.minByOrNull { cover ->
+                // Prefer coverage threatening the returner over a gunner already past the blocker's lane.
+                blocker.currentPos.distance2DTo(cover.currentPos) + cover.currentPos.distance2DTo(returner.currentPos) * RETURN_BLOCK_THREAT_WEIGHT
+            } ?: break
+            availableCoverage.remove(coverPlayer)
+            val distance = blocker.currentPos.distance2DTo(coverPlayer.currentPos)
+            blocker.blockingId = if (distance <= RETURN_BLOCK_CONTACT_YDS) coverPlayer.id else null
+            if (distance > RETURN_BLOCK_CONTACT_YDS) {
+                MovementEngine.intercept(blocker, coverPlayer.currentPos, Vector3D(0f, direction * coverPlayer.speedYdsPerSec, 0f), tickDeltaSec)
             }
         }
     }
@@ -833,7 +847,9 @@ class PlaySimulator(
         private const val KICK_OPERATION_SEC = 0.65f
         private const val KICK_APPROACH_YDS = 4f
         private const val KICK_COVERAGE_SPRINT_YDS = 80f
-        private const val RETURN_BLOCK_CONTACT_YDS = 1.2f
+        private const val RETURN_BLOCK_CONTACT_YDS = 2.5f
+        private const val KICKOFF_BLOCKER_RETREAT_YDS = 3f
+        private const val RETURN_BLOCK_THREAT_WEIGHT = 0.5f
         private const val TACKLE_RADIUS_YDS = 1.6f
         private const val BASE_TACKLE_CHANCE = 0.88f
         private const val ENGAGED_TACKLE_RADIUS_YDS = 1.2f

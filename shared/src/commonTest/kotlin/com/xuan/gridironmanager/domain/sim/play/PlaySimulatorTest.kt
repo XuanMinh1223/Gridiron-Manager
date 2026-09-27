@@ -115,6 +115,45 @@ class PlaySimulatorTest {
     }
 
     @Test
+    fun testKickoffBlockersMoveAndEngageAfterFielding() {
+        val returner = RunningPlayer("R", Vector3D(FieldGeometry.CENTER_X, 95f, 0f), 7f, null, isOffense = false, slot = "KR")
+        val blocker = RunningPlayer("B", Vector3D(FieldGeometry.CENTER_X, 67f, 0f), 8f, null, isOffense = false, slot = "KRB0")
+        val coverage = RunningPlayer("C", Vector3D(FieldGeometry.CENTER_X, 35f, 0f), 8f, null, slot = "KC0")
+        val snap = Snap(listOf(kicker(35f, 50, 99), coverage), listOf(returner, blocker), PlayType.KICKOFF, 35, true)
+        val simulator = PlaySimulator(snap, Random(4))
+        val startingY = blocker.currentPos.y
+        repeat(15) { simulator.tick(tick) }
+        assertEquals(startingY, blocker.currentPos.y, "Setup players cannot move before fielding")
+
+        var moved = false
+        repeat(250) {
+            simulator.tick(tick)
+            if (blocker.currentPos.y != startingY) moved = true
+        }
+        assertTrue(moved, "Kickoff blocker should pursue coverage after fielding")
+    }
+
+    @Test
+    fun testKickoffSetupUnitsWaitThenBlockersRetreat() {
+        val snap = SnapBuilder.build(GameState.openingKickoff(), matchup, Playbook.KICKOFF, Playbook.COVER_2)
+        val kicker = snap.offense.single { it.slot == "K" }
+        val accurateKicker = kicker.copy(attributes = kicker.attributes.copy(kickPower = 65, kickAccuracy = 99))
+        val fieldableSnap = snap.copy(offense = snap.offense.map { if (it === kicker) accurateKicker else it })
+        val blocker = fieldableSnap.defense.first { it.slot?.startsWith("KRB") == true }
+        val coverage = fieldableSnap.offense.first { it.slot?.startsWith("KC") == true }
+        val blockerStart = blocker.currentPos
+        val coverageStart = coverage.currentPos
+        val simulator = PlaySimulator(fieldableSnap, Random(4))
+        repeat(60) { simulator.tick(tick) }
+
+        assertEquals(blockerStart, blocker.currentPos)
+        assertEquals(coverageStart, coverage.currentPos)
+        repeat(150) { simulator.tick(tick) }
+        assertTrue(blocker.currentPos.y > blockerStart.y, "Receiving blockers retreat toward their goal line after fielding")
+        assertTrue(coverage.currentPos.y > coverageStart.y, "Coverage releases after fielding")
+    }
+
+    @Test
     fun testKickAccuracyAddsLateralAndLongitudinalLandingError() {
         fun landing(seed: Int, accuracy: Int): Vector3D {
             val snap = Snap(listOf(kicker(35f, kickPower = 50, kickAccuracy = accuracy)), emptyList(), PlayType.KICKOFF, 35, true)

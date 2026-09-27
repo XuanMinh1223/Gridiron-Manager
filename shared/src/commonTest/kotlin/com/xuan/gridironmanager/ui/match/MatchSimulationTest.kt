@@ -42,6 +42,18 @@ class MatchSimulationTest {
         }
 
     @Test
+    fun testKickoffSummaryDoesNotShowDefensivePlay() =
+        testScope.runTest {
+            val presenter = presenter()
+            presenter.startMatch(matchup)
+
+            presenter.snapBall()
+            advanceUntilIdle()
+
+            assertFalse(presenter.uiState.value.playByPlayText.contains(" vs "))
+        }
+
+    @Test
     fun testGameClockRunsInRealTimeDuringPlay() =
         testScope.runTest {
             val presenter = presenter()

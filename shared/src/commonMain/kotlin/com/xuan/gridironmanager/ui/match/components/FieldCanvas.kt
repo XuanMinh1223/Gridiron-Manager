@@ -119,10 +119,10 @@ private class FieldTransform(
     val top = (canvasSize.height - height) / 2 + camera.pan.y
     private val attackingUp = isAttackingUp
 
-    /** World y runs from the home goal line (0) upwards, with the home end zone at the bottom of the screen. */
+    /** World y spans -10..110; mirror around midfield, then offset by the near end zone. */
     fun toOffset(pos: Vector3D): Offset {
-        val worldY = if (attackingUp) pos.y else FIELD_LENGTH_WITH_END_ZONES_YDS - (pos.y + END_ZONE_DEPTH_YDS)
-        return Offset(left + pos.x * scale, top + worldY * scale)
+        val worldY = if (attackingUp) pos.y else 100f - pos.y
+        return Offset(left + pos.x * scale, top + (worldY + END_ZONE_DEPTH_YDS) * scale)
     }
 
     fun yToPx(worldY: Float) = toOffset(Vector3D(0f, worldY, 0f)).y
@@ -131,11 +131,7 @@ private class FieldTransform(
 private fun DrawScope.drawField(field: FieldTransform) {
     drawRect(GrassColor, topLeft = Offset(field.left, field.top), size = Size(field.width, field.height))
     drawRect(EndZoneColor, topLeft = Offset(field.left, field.top), size = Size(field.width, END_ZONE_DEPTH_YDS * field.scale))
-    drawRect(
-        EndZoneColor,
-        topLeft = Offset(field.left, field.yToPx(0f)),
-        size = Size(field.width, END_ZONE_DEPTH_YDS * field.scale),
-    )
+    drawRect(EndZoneColor, topLeft = Offset(field.left, field.top + field.height - END_ZONE_DEPTH_YDS * field.scale), size = Size(field.width, END_ZONE_DEPTH_YDS * field.scale))
 
     // Yard lines every 5 yards, goal lines bold
     for (yard in 0..100 step 5) {
