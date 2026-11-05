@@ -13,6 +13,8 @@ import com.xuan.gridironmanager.domain.sim.match.GameState
 import com.xuan.gridironmanager.domain.sim.match.Rules
 import com.xuan.gridironmanager.domain.sim.movement.PlayerRole
 import com.xuan.gridironmanager.domain.sim.movement.RunningPlayer
+import com.xuan.gridironmanager.domain.sim.play.RotationAssignment
+import com.xuan.gridironmanager.domain.sim.play.RotationPlan
 import com.xuan.gridironmanager.domain.sim.play.Snap
 import com.xuan.gridironmanager.domain.sim.toRunningPlayer
 import kotlin.math.abs
@@ -48,7 +50,24 @@ object SnapBuilder {
         val unit = Playbook.defensiveUnitFor(offensivePlay.type, defensiveCall)
         val defenseAnchorWorldY =
             if (unit.formation.type == FormationType.KICK_RETURN) FieldGeometry.toWorldY(KICK_RETURN_ANCHOR_YARD_LINE, isAttackingUp) else losWorldY
-        val defense = buildDefense(defenseRoster, unit, defenseAnchorWorldY, isAttackingUp, offense)
+        // Kicking plays swap in a special teams unit, which never carries a disguise. For a disguised scrimmage call
+        // the lineup is the shell; the true assignments ride along as a rotation plan applied after the snap.
+        val disguise = unit.disguise
+        val defense = buildDefense(defenseRoster, unit.shell(), defenseAnchorWorldY, isAttackingUp, offense)
+        val rotation =
+            disguise?.let {
+                val trueDefense = buildDefense(defenseRoster, unit, defenseAnchorWorldY, isAttackingUp, offense)
+                RotationPlan(
+                    rotationSec = it.rotationSec,
+                    assignments =
+                        trueDefense
+                            .filter { player -> player.slot != null }
+                            .associate { player ->
+                                val slot = player.slot!!
+                                slot to RotationAssignment(slot, player.role, player.coverageTargetId, player.zoneLandmark)
+                            },
+                )
+            }
         val specialTeamsDefense =
             if (offensivePlay.type == PlayType.PUNT) defense.map { if (it.slot in setOf("LDE", "LDT", "RDT", "RDE")) it.copy(role = PlayerRole.PASS_RUSHER) else it }
             else defense
@@ -61,6 +80,7 @@ object SnapBuilder {
             losYardLine = losYardLine,
             isAttackingUp = isAttackingUp,
             progression = offensivePlay.progression.mapNotNull { offenseBySlot[it]?.id },
+            rotation = rotation,
         )
     }
 

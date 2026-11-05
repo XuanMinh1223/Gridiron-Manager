@@ -35,7 +35,10 @@ class MatchSimulator(
         defensiveCall: DefensiveCall,
     ): Snap = SnapBuilder.build(state, matchup, offensivePlay, defensiveCall)
 
-    fun startPlay(snap: Snap): PlaySimulator = PlaySimulator(snap, random)
+    fun startPlay(
+        snap: Snap,
+        qbIdentified: Boolean? = null,
+    ): PlaySimulator = PlaySimulator(snap, random, qbIdentified)
 
     fun resolve(
         state: GameState,

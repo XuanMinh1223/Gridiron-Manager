@@ -10,6 +10,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.xuan.gridironmanager.domain.model.PlayType
 import com.xuan.gridironmanager.ui.match.MatchActions
 import com.xuan.gridironmanager.ui.match.PlayCallState
 
@@ -26,6 +27,10 @@ fun PlayCallPanel(
             text = if (playCall.isUserOnOffense) "Your offense" else "Your defense",
             style = MaterialTheme.typography.labelLarge,
         )
+        // Only relevant to the QB on a pass play: the read of a disguised coverage
+        playCall.coverageHint?.takeIf { playCall.isUserOnOffense && playCall.selectedOffense?.type == PlayType.PASS }?.let {
+            Text(text = it.text, style = MaterialTheme.typography.bodySmall)
+        }
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (playCall.isUserOnOffense) {
                 items(playCall.offenseOptions, key = { it.id }) { play ->

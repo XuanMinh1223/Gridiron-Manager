@@ -28,7 +28,10 @@ class PlayCaller(
                 state.distance <= SHORT_YARDAGE -> listOf(Playbook.BASE_MAN, Playbook.COVER_3, Playbook.NICKEL_BLITZ)
                 else -> Playbook.defensiveCalls
             }
-        return options.random(random)
+        val call = options.random(random)
+        if (state.phase != GamePhase.SCRIMMAGE && state.phase != GamePhase.EXTRA_POINT) return call
+        val disguised = Playbook.disguisedCounterparts[call.id]
+        return if (random.nextFloat() < DISGUISE_CHANCE && disguised != null) disguised.random(random) else call
     }
 
     private fun callFourthDown(state: GameState): OffensivePlay {
@@ -88,6 +91,9 @@ class PlayCaller(
     private companion object {
         const val SHORT_YARDAGE = 2
         const val LONG_YARDAGE = 8
+
+        /** Prototype: chance the CPU swaps its coverage pick for a disguised version of it. */
+        const val DISGUISE_CHANCE = 0.30f
         const val FIELD_GOAL_RANGE_BUFFER_YDS = 5
         const val MAX_FIELD_GOAL_ATTEMPT_YDS = 55
         const val GO_FOR_IT_ON_FOURTH_AND_ONE_YARD_LINE = 40

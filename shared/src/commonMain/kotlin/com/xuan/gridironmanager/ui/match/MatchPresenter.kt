@@ -2,7 +2,10 @@ package com.xuan.gridironmanager.ui.match
 
 import com.xuan.gridironmanager.domain.model.Matchup
 import com.xuan.gridironmanager.domain.model.PlayType
+import com.xuan.gridironmanager.domain.model.PlayerAttributes
+import com.xuan.gridironmanager.domain.model.Position
 import com.xuan.gridironmanager.domain.sim.MatchSimulator
+import com.xuan.gridironmanager.domain.sim.ai.CoverageRead
 import com.xuan.gridironmanager.domain.sim.match.GamePhase
 import com.xuan.gridironmanager.domain.sim.match.GameState
 import com.xuan.gridironmanager.domain.sim.match.PlayOutcome
@@ -43,6 +46,9 @@ class MatchPresenter(
     // The CPU's calls for the next snap, for whichever sides it controls
     private var cpuOffense: OffensivePlay? = null
     private var cpuDefense: DefensiveCall? = null
+
+    // The user's QB's pre-snap read of the CPU's coverage, if it is disguised and the user is on offense
+    private var userQbIdentified: Boolean? = null
 
     fun startMatch(
         matchup: Matchup,
@@ -108,7 +114,7 @@ class MatchPresenter(
         }
 
         scope.launch(simDispatcher) {
-            val play = simulator.startPlay(snap)
+            val play = simulator.startPlay(snap, userQbIdentified)
             var outcome: PlayOutcome?
             do {
                 delay(scaledMillis(TICK_MILLIS).milliseconds)
@@ -177,15 +183,23 @@ class MatchPresenter(
         cpuDefense = simulator.playCaller.callDefense(state)
         val isUserOnOffense = state.isHomePossession == userIsHome
 
+        // The human QB's read of a disguised coverage is rolled once per play, here, and handed to the simulator at the
+        // snap so the hint and the play always agree. The CPU's true call stays out of the UI state.
+        val disguisedCall = cpuDefense?.takeIf { isUserOnOffense && it.disguise != null && state.phase != GamePhase.KICKOFF }
+        userQbIdentified = disguisedCall?.let { CoverageRead.roll(userQbAttributes(), random) }
+        val coverageHint = disguisedCall?.let { call -> userQbIdentified?.let { CoverageRead.hint(call, it) } }
+
         _uiState.update {
             it.copy(
                 playCall =
                     it.playCall.copy(
                         isUserOnOffense = isUserOnOffense,
                         offenseOptions = if (isUserOnOffense) Playbook.offensivePlaysFor(state.phase) else emptyList(),
-                        defenseOptions = if (!isUserOnOffense && state.phase != GamePhase.KICKOFF) Playbook.defensiveCalls else emptyList(),
+                        defenseOptions = if (!isUserOnOffense && state.phase != GamePhase.KICKOFF) Playbook.defenseOptions else emptyList(),
                         selectedOffense = cpuOffense,
-                        selectedDefense = cpuDefense,
+                        // Only the user's own call is exposed: on offense the CPU's call may be a disguise
+                        selectedDefense = if (isUserOnOffense) null else cpuDefense,
+                        coverageHint = coverageHint,
                     ),
             )
         }
@@ -214,6 +228,11 @@ class MatchPresenter(
                     ),
             )
         }
+    }
+
+    private fun userQbAttributes(): PlayerAttributes {
+        val roster = currentMatchup?.let { if (userIsHome) it.homeRoster else it.awayRoster }.orEmpty()
+        return roster.firstOrNull { it.position == Position.QB.abbreviation }?.attributes ?: PlayerAttributes.AVERAGE
     }
 
     private fun MatchUiState.withLineup(

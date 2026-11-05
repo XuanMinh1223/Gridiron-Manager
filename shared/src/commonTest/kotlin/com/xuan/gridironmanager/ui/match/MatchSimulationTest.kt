@@ -105,7 +105,7 @@ class MatchSimulationTest {
 
             val playCall = presenter.uiState.value.playCall
             assertFalse(playCall.isUserOnOffense)
-            assertEquals(Playbook.defensiveCalls, playCall.defenseOptions)
+            assertEquals(Playbook.defenseOptions, playCall.defenseOptions)
             assertTrue(playCall.offenseOptions.isEmpty())
         }
 

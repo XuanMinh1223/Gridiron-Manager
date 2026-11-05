@@ -207,6 +207,43 @@ object Playbook {
 
     val BASE_MAN = DefensiveCall("43_man", "4-3 Man", Formations.BASE_4_3, Coverage.MAN)
 
+    // Disguised calls: same front and no blitzers, so only the coverage rotates (shell -> true) shortly after the snap
+
+    val COVER_3_FROM_2 =
+        DefensiveCall(
+            id = "43_cover_3_from_2",
+            name = "Cover 3 (from 2)",
+            formation = Formations.BASE_4_3,
+            coverage = Coverage.COVER_3,
+            zones = COVER_3.zones,
+            disguise = CoverageDisguise(shellCoverage = Coverage.COVER_2, shellZones = COVER_2.zones),
+        )
+
+    val COVER_2_FROM_3 =
+        DefensiveCall(
+            id = "43_cover_2_from_3",
+            name = "Cover 2 (from 3)",
+            formation = Formations.BASE_4_3,
+            coverage = Coverage.COVER_2,
+            zones = COVER_2.zones,
+            disguise = CoverageDisguise(shellCoverage = Coverage.COVER_3, shellZones = COVER_3.zones),
+        )
+
+    val COVER_2_FROM_MAN =
+        DefensiveCall(
+            id = "43_cover_2_from_man",
+            name = "Cover 2 (from man)",
+            formation = Formations.BASE_4_3,
+            coverage = Coverage.COVER_2,
+            zones = COVER_2.zones,
+            disguise = CoverageDisguise(shellCoverage = Coverage.MAN),
+        )
+
+    /** Undisguised call id -> the disguised calls that play out the same true coverage, used by the CPU caller. */
+    val disguisedCounterparts: Map<String, List<DefensiveCall>> by lazy {
+        mapOf(COVER_2.id to listOf(COVER_2_FROM_3, COVER_2_FROM_MAN), COVER_3.id to listOf(COVER_3_FROM_2))
+    }
+
     val NICKEL_MAN = DefensiveCall("nickel_man", "Nickel Man", Formations.NICKEL, Coverage.MAN)
 
     val NICKEL_COVER_2 =
@@ -244,6 +281,9 @@ object Playbook {
 
     /** Calls the defense can choose from on scrimmage downs and two-point tries. */
     val defensiveCalls: List<DefensiveCall> = listOf(COVER_2, COVER_3, BASE_MAN, NICKEL_MAN, NICKEL_COVER_2, NICKEL_BLITZ)
+
+    /** Everything a human defensive caller can pick: the undisguised calls plus the prototype disguises. */
+    val defenseOptions: List<DefensiveCall> = defensiveCalls + listOf(COVER_3_FROM_2, COVER_2_FROM_3, COVER_2_FROM_MAN)
 
     /** Kicking plays reveal themselves at the line, so the defense sends out its special teams unit instead of its call. */
     fun defensiveUnitFor(

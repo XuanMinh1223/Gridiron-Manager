@@ -1,6 +1,7 @@
 package com.xuan.gridironmanager.ui.match
 
 import com.xuan.gridironmanager.domain.model.Vector3D
+import com.xuan.gridironmanager.domain.sim.ai.CoverageHint
 import com.xuan.gridironmanager.domain.sim.match.GameState
 import com.xuan.gridironmanager.domain.sim.movement.RunningPlayer
 import com.xuan.gridironmanager.domain.sim.playbook.DefensiveCall
@@ -36,6 +37,8 @@ data class PlayCallState(
     val defenseOptions: List<DefensiveCall> = emptyList(),
     val selectedOffense: OffensivePlay? = null,
     val selectedDefense: DefensiveCall? = null,
+    /** The user QB's pre-snap read of a disguised coverage. Never derived from the true call when the read failed. */
+    val coverageHint: CoverageHint? = null,
 ) {
     /** Whether there is a meaningful choice for the user to make before the snap. */
     val isUserChoosing: Boolean

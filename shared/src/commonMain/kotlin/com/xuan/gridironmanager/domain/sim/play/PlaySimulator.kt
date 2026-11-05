@@ -5,6 +5,7 @@ import com.xuan.gridironmanager.domain.model.Vector3D
 import com.xuan.gridironmanager.domain.sim.AttributeTranslator
 import com.xuan.gridironmanager.domain.sim.BallTrajectory
 import com.xuan.gridironmanager.domain.sim.FieldGeometry
+import com.xuan.gridironmanager.domain.sim.ai.CoverageRead
 import com.xuan.gridironmanager.domain.sim.ai.QbBrain
 import com.xuan.gridironmanager.domain.sim.ai.QbState
 import com.xuan.gridironmanager.domain.sim.match.FieldGoalResult
@@ -32,6 +33,8 @@ import kotlin.random.Random
 class PlaySimulator(
     private val snap: Snap,
     private val random: Random = Random.Default,
+    /** A pre-snap coverage read already rolled for this play (the human QB's, shown as a hint); null to roll here. */
+    qbIdentifiedOverride: Boolean? = null,
 ) {
     private val offense = snap.offense
     private val defense = snap.defense
@@ -51,7 +54,28 @@ class PlaySimulator(
     private val gazeById = players.associate { it.id to initialGaze(it) }.toMutableMap()
 
     private val passer = if (playType == PlayType.PASS) offense.find { it.role == PlayerRole.PASSER } else null
-    private val qbBrain = passer?.let { QbBrain(it, snap.progression.mapNotNull { id -> playersById[id] }) }
+
+    /** One seeded roll per disguised pass play: did the QB see through the shell? Always true without a disguise. */
+    private val qbIdentified: Boolean =
+        if (passer != null && snap.rotation != null) qbIdentifiedOverride ?: CoverageRead.roll(passer.attributes, random) else true
+
+    /** Whether the QB was fooled by this play's coverage disguise. */
+    val qbWasFooled: Boolean get() = !qbIdentified
+
+    private val qbBrain =
+        passer?.let {
+            QbBrain(
+                qb = it,
+                progressions = snap.progression.mapNotNull { id -> playersById[id] },
+                readDelaySec = if (qbIdentified) 0f else CoverageRead.FOOLED_READ_DELAY_SEC,
+                recoverAtSec = (snap.rotation?.rotationSec ?: 0f) + recognitionDelaySec(it.attributes.awareness.coerceIn(0, 100)),
+            )
+        }
+
+    /** True while a fooled QB is still reading the shell rather than the rotated coverage. */
+    val isQbFooled: Boolean get() = qbBrain?.isFooled == true
+
+    private var hasRotated = false
 
     /** The runner on run plays, or the receiver after a catch. */
     private var ballCarrier = if (playType == PlayType.RUN) offense.find { it.role == PlayerRole.BALL_CARRIER } else null
@@ -117,6 +141,7 @@ class PlaySimulator(
                 carrierVelocity = Vector3D((carrier.currentPos.x - start.x) / tickDeltaSec, (carrier.currentPos.y - start.y) / tickDeltaSec, 0f)
             }
         }
+        snap.rotation?.let { if (!hasRotated && elapsedSec >= it.rotationSec) applyRotation(it) }
         moveDefense(tickDeltaSec)
         updateGazes(tickDeltaSec)
 
@@ -703,6 +728,22 @@ class PlaySimulator(
         receiver.currentPos = ball.copy(z = 0f)
         ballCarrier = receiver
         return null
+    }
+
+    /**
+     * Rotates a disguised coverage into its true call. Defenders are mutated in place (see [RunningPlayer]) so blocking
+     * and the overlay keep seeing the same objects. Rushers are never part of a rotation, so no block changes.
+     */
+    private fun applyRotation(plan: RotationPlan) {
+        hasRotated = true
+        for (defender in defense) {
+            val assignment = plan.assignments[defender.slot] ?: continue
+            defender.role = assignment.role
+            defender.coverageTargetId = assignment.coverageTargetId
+            defender.zoneLandmark = assignment.zoneLandmark
+            // Re-evaluate ball tracking against the new assignment with the usual awareness delays
+            defenderTracking.remove(defender.id)
+        }
     }
 
     private fun updateGazes(tickDeltaSec: Float) {

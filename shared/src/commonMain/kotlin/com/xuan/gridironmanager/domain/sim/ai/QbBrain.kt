@@ -31,8 +31,18 @@ class QbBrain(
     private val dropbackSec: Float = DEFAULT_DROPBACK_SEC,
     private val forceThrowSec: Float = DEFAULT_FORCE_THROW_SEC,
     var state: QbState = QbState.DROPPING_BACK,
+    /**
+     * Read time lost to a coverage disguise the QB failed to see through. The first read lands this much later and
+     * every read after it stays this far behind; [forceThrowSec] and the shrinking window do not move.
+     */
+    private val readDelaySec: Float = 0f,
+    /** When a fooled QB re-identifies the true coverage (seconds after the snap). Only affects [isFooled]. */
+    private val recoverAtSec: Float = 0f,
 ) {
     private var elapsedSec = 0f
+
+    /** True while the QB is still reading the shell rather than the rotated coverage. */
+    val isFooled: Boolean get() = readDelaySec > 0f && elapsedSec < recoverAtSec
 
     /** The progression currently in the QB's visual read, if any. */
     var gazeTargetId: String? = null
@@ -58,8 +68,9 @@ class QbBrain(
         }
         state = QbState.READING_PROGRESSIONS
 
-        val readsSoFar = 1 + ((elapsedSec - dropbackSec) / READ_TIME_SEC).toInt()
-        gazeTargetId = progressions.getOrNull((readsSoFar - 1).coerceAtMost(progressions.lastIndex))?.id
+        // A fooled QB's reads start late: until then they are still looking at the play's first read
+        val readsSoFar = if (elapsedSec < dropbackSec + readDelaySec) 0 else 1 + ((elapsedSec - dropbackSec - readDelaySec) / READ_TIME_SEC).toInt()
+        gazeTargetId = progressions.getOrNull((readsSoFar - 1).coerceIn(0, progressions.lastIndex.coerceAtLeast(0)))?.id
 
         val reads = progressions.map { receiver -> planThrow(receiver).let { Read(receiver, it, separationAtCatch(it, defenders)) } }
         val isPressured = defenders.any { qb.currentPos.distance2DTo(it.currentPos) <= PRESSURE_RADIUS_YDS }
