@@ -120,6 +120,15 @@ class DisguisedGameBalanceTest {
                 box.punts++
             }
 
+            PlayType.KNEEL -> {
+                box.rushes++
+                box.rushYards += -1
+            }
+
+            PlayType.SPIKE -> {
+                box.passAttempts++
+            }
+
             PlayType.KICKOFF -> {}
         }
     }

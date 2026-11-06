@@ -107,7 +107,7 @@ object SnapBuilder {
                     }
 
                     else -> {
-                        play.routes[node.slot]?.let { toWorldRoute(it, node, start, direction, extendToEndZone = role == PlayerRole.BALL_CARRIER) }
+                        play.routes[node.slot]?.let { toWorldRoute(it, node, start, direction, extendToEndZone = role == PlayerRole.BALL_CARRIER && play.type == PlayType.RUN) }
                     }
                 }
             player.toRunningPlayer(route).copy(
@@ -150,6 +150,12 @@ object SnapBuilder {
                     else -> PlayerRole.BLOCKER
                 }
             }
+
+            // The QB takes the snap and kneels; everyone else just holds their block
+            PlayType.KNEEL -> if (node.slot == play.ballCarrierSlot) PlayerRole.BALL_CARRIER else PlayerRole.BLOCKER
+
+            // No routes on a spike: receivers do not run anywhere
+            PlayType.SPIKE -> if (node.position == Position.QB) PlayerRole.PASSER else PlayerRole.BLOCKER
         }
 
     private fun buildDefense(

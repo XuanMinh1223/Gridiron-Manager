@@ -18,6 +18,9 @@ data class KickResult(
         },
     /** The team that kicked retains the ball only on a legal recovery of a live kick or muff. */
     val recoveredByKickingTeam: Boolean = false,
+    /** Snap ids of the player who fielded the kick, and of whoever recovered a muff or return fumble. */
+    val returnerId: String? = null,
+    val recovererId: String? = null,
 )
 
 enum class KickOutcomeType {
@@ -40,4 +43,5 @@ data class FieldGoalResult(
     val isGood: Boolean,
     val distanceYds: Int,
     val description: String,
+    val kickerId: String? = null,
 )

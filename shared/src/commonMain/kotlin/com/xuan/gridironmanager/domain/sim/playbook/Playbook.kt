@@ -156,6 +156,21 @@ object Playbook {
 
     val KICKOFF = OffensivePlay("kickoff", "Kickoff", PlayCategory.KICKOFF, PlayType.KICKOFF, Formations.KICKOFF)
 
+    // Situational plays: deliberately not in [scrimmagePlays], so the CPU's random pick can never choose them
+
+    val KNEEL =
+        OffensivePlay(
+            id = "qb_kneel",
+            name = "QB Kneel",
+            category = PlayCategory.KNEEL,
+            type = PlayType.KNEEL,
+            formation = Formations.SINGLEBACK,
+            routes = mapOf("QB" to Routes.KNEEL),
+            ballCarrierSlot = "QB",
+        )
+
+    val SPIKE = OffensivePlay("spike", "Spike", PlayCategory.SPIKE, PlayType.SPIKE, Formations.SINGLEBACK)
+
     /** Plays from scrimmage, which double as two-point tries. */
     val scrimmagePlays: List<OffensivePlay> =
         listOf(INSIDE_ZONE, OUTSIDE_ZONE, SHOTGUN_DRAW, QUICK_SLANTS, STICK, CURL_FLAT, DIG_DRAG, FOUR_VERTICALS, POST_CORNER)
@@ -164,7 +179,7 @@ object Playbook {
         when (phase) {
             GamePhase.KICKOFF -> listOf(KICKOFF)
             GamePhase.EXTRA_POINT -> listOf(EXTRA_POINT) + scrimmagePlays
-            GamePhase.SCRIMMAGE -> scrimmagePlays + listOf(FIELD_GOAL, PUNT)
+            GamePhase.SCRIMMAGE -> scrimmagePlays + listOf(FIELD_GOAL, PUNT, KNEEL, SPIKE)
         }
 
     // Defense
@@ -294,6 +309,6 @@ object Playbook {
             PlayType.KICKOFF -> KICK_RETURN
             PlayType.PUNT -> PUNT_RETURN
             PlayType.FIELD_GOAL -> FIELD_GOAL_BLOCK
-            PlayType.RUN, PlayType.PASS -> call
+            PlayType.RUN, PlayType.PASS, PlayType.KNEEL, PlayType.SPIKE -> call
         }
 }

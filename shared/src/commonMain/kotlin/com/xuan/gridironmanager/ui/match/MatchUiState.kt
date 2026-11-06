@@ -3,6 +3,7 @@ package com.xuan.gridironmanager.ui.match
 import com.xuan.gridironmanager.domain.model.Vector3D
 import com.xuan.gridironmanager.domain.sim.ai.CoverageHint
 import com.xuan.gridironmanager.domain.sim.match.GameState
+import com.xuan.gridironmanager.domain.sim.match.GameStats
 import com.xuan.gridironmanager.domain.sim.movement.RunningPlayer
 import com.xuan.gridironmanager.domain.sim.playbook.DefensiveCall
 import com.xuan.gridironmanager.domain.sim.playbook.OffensivePlay
@@ -10,6 +11,8 @@ import com.xuan.gridironmanager.ui.match.overlay.TacticalOverlay
 
 data class MatchUiState(
     val gameState: GameState = GameState.openingKickoff(),
+    /** The box score so far. Display only. */
+    val gameStats: GameStats = GameStats(),
     val players: List<RunningPlayer> = emptyList(),
     val ballPosition: Vector3D? = null,
     val playByPlayText: String = "Ready for kick-off",

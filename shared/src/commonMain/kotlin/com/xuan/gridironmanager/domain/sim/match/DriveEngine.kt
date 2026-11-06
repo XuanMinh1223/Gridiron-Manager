@@ -16,21 +16,28 @@ class DriveEngine {
     ): GameState {
         if (state.isGameOver) return state
 
-        return when (state.phase) {
-            // Tries are untimed, and the quarter cannot end until the try is over
-            GamePhase.EXTRA_POINT -> {
-                advanceClock(resolveExtraPoint(state, outcome))
+        val next =
+            when (state.phase) {
+                // Tries are untimed, and the quarter cannot end until the try is over
+                GamePhase.EXTRA_POINT -> {
+                    advanceClock(resolveExtraPoint(state, outcome))
+                }
+
+                GamePhase.KICKOFF -> {
+                    advanceClock(resolveKickoff(runClock(state, playDurationSec), outcome))
+                }
+
+                GamePhase.SCRIMMAGE -> {
+                    val scrimmage = resolveScrimmage(runClock(state, playDurationSec), outcome, skipRunoff = state.timeoutCalled)
+                    if (scrimmage.phase == GamePhase.EXTRA_POINT) scrimmage else advanceClock(scrimmage)
+                }
             }
 
-            GamePhase.KICKOFF -> {
-                advanceClock(resolveKickoff(runClock(state, playDurationSec), outcome))
-            }
-
-            GamePhase.SCRIMMAGE -> {
-                val next = resolveScrimmage(runClock(state, playDurationSec), outcome)
-                if (next.phase == GamePhase.EXTRA_POINT) next else advanceClock(next)
-            }
-        }
+        // Sudden death: any score that was not already ended by a touchdown (a field goal, a safety) ends it here.
+        // Never mid-try, which cannot happen in overtime but is guarded anyway.
+        val settled = if (next.isOvertime && next.homeScore != next.awayScore && next.phase != GamePhase.EXTRA_POINT) next.copy(isGameOver = true) else next
+        // A timeout only ever applies to the play it was called for
+        return settled.copy(timeoutCalled = false)
     }
 
     private fun resolveKickoff(
@@ -71,6 +78,7 @@ class DriveEngine {
     private fun resolveScrimmage(
         state: GameState,
         outcome: PlayOutcome,
+        skipRunoff: Boolean,
     ): GameState =
         when (outcome) {
             // Punt
@@ -94,13 +102,14 @@ class DriveEngine {
             }
 
             is PlayOutcome.Scrimmage -> {
-                resolveScrimmagePlay(state, outcome.result)
+                resolveScrimmagePlay(state, outcome.result, skipRunoff)
             }
         }
 
     private fun resolveScrimmagePlay(
         state: GameState,
         result: PlayResult,
+        skipRunoff: Boolean,
     ): GameState {
         // Where the play ended, from the offense's point of view. Beyond 0..100 means inside an end zone.
         val spot = state.yardLine + result.yardsGained
@@ -161,6 +170,7 @@ class DriveEngine {
 
         val clockKeepsRunning =
             !result.clockStops &&
+                !skipRunoff &&
                 nextState.phase == GamePhase.SCRIMMAGE &&
                 nextState.isHomePossession == state.isHomePossession
         return if (clockKeepsRunning) runClock(nextState, Rules.BETWEEN_PLAY_RUNOFF_SEC.toFloat()) else nextState
@@ -171,14 +181,17 @@ class DriveEngine {
         seconds: Float,
     ): GameState = state.copy(clockSeconds = (state.clockSeconds - seconds.roundToInt()).coerceAtLeast(0))
 
-    /** Six points to the possessing team, who then attempt the try from the two-point line. */
-    private fun scoreTouchdown(state: GameState): GameState =
-        addPoints(state, Rules.TOUCHDOWN_POINTS, toPossessingTeam = true).copy(
+    /** Six points to the possessing team, who then attempt the try from the two-point line. In overtime it ends the game, with no try. */
+    private fun scoreTouchdown(state: GameState): GameState {
+        val scored = addPoints(state, Rules.TOUCHDOWN_POINTS, toPossessingTeam = true)
+        if (state.isOvertime) return scored.copy(isGameOver = true)
+        return scored.copy(
             down = 1,
             distance = Rules.FIELD_LENGTH_YDS - Rules.TWO_POINT_YARD_LINE,
             yardLine = Rules.TWO_POINT_YARD_LINE,
             phase = GamePhase.EXTRA_POINT,
         )
+    }
 
     /** A kick return scores for the receiving team, which then owns the try. */
     private fun scoreKickReturnTouchdown(state: GameState): GameState = scoreTouchdown(state.copy(isHomePossession = !state.isHomePossession))
@@ -226,7 +239,8 @@ class DriveEngine {
         if (state.clockSeconds > 0) return state
 
         if (state.quarter >= Rules.QUARTERS) {
-            return state.copy(clockSeconds = 0, isGameOver = true)
+            // Tied at the end of regulation: play overtime. A tie that survives overtime stands.
+            return if (state.homeScore == state.awayScore && !state.isOvertime) startOvertime(state) else state.copy(clockSeconds = 0, isGameOver = true)
         }
 
         val nextQuarter = state.quarter + 1
@@ -241,11 +255,28 @@ class DriveEngine {
                 isHomePossession = false,
                 phase = GamePhase.KICKOFF,
                 isSafetyFreeKick = false,
+                homeTimeouts = Rules.TIMEOUTS_PER_HALF,
+                awayTimeouts = Rules.TIMEOUTS_PER_HALF,
             )
         } else {
             rolledOver
         }
     }
+
+    /** The away team kicks off (the home team kicked off to open the game), with two timeouts each. */
+    private fun startOvertime(state: GameState): GameState =
+        state.copy(
+            isOvertime = true,
+            clockSeconds = Rules.OVERTIME_LENGTH_SEC,
+            down = 1,
+            distance = Rules.FIRST_DOWN_DISTANCE,
+            yardLine = Rules.KICKOFF_YARD_LINE,
+            phase = GamePhase.KICKOFF,
+            isHomePossession = false,
+            isSafetyFreeKick = false,
+            homeTimeouts = Rules.OVERTIME_TIMEOUTS,
+            awayTimeouts = Rules.OVERTIME_TIMEOUTS,
+        )
 
     /** Inside the opponent's 10 the distance is "and goal". */
     private fun firstDownDistance(yardLine: Int): Int = minOf(Rules.FIRST_DOWN_DISTANCE, Rules.FIELD_LENGTH_YDS - yardLine).coerceAtLeast(1)

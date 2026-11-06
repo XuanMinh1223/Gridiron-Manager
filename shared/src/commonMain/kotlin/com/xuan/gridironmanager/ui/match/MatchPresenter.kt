@@ -8,6 +8,7 @@ import com.xuan.gridironmanager.domain.sim.MatchSimulator
 import com.xuan.gridironmanager.domain.sim.ai.CoverageRead
 import com.xuan.gridironmanager.domain.sim.match.GamePhase
 import com.xuan.gridironmanager.domain.sim.match.GameState
+import com.xuan.gridironmanager.domain.sim.match.GameStats
 import com.xuan.gridironmanager.domain.sim.match.PlayOutcome
 import com.xuan.gridironmanager.domain.sim.movement.RunningPlayer
 import com.xuan.gridironmanager.domain.sim.play.Snap
@@ -56,7 +57,7 @@ class MatchPresenter(
     ) {
         currentMatchup = matchup
         simulator = MatchSimulator(matchup, random)
-        _uiState.update { it.copy(gameState = initialState, isMatchReady = true) }
+        _uiState.update { it.copy(gameState = initialState, gameStats = GameStats(), isMatchReady = true) }
         preparePlayCalls()
         showPreview()
     }
@@ -100,7 +101,9 @@ class MatchPresenter(
         val current = _uiState.value
         if (current.isPlayRunning || current.gameState.isGameOver) return
 
-        val state = current.gameState
+        // If the CPU has the ball it may call a timeout; if the user has it, only the user's button can
+        val userHasBall = current.gameState.isHomePossession == userIsHome
+        val state = if (userHasBall) current.gameState else simulator.maybeCallTimeout(current.gameState)
         val offensivePlay = offensiveCallForSnap(current.playCall) ?: return
         val defensiveCall = defensiveCallForSnap(current.playCall) ?: return
         val snap = simulator.lineUp(state, offensivePlay, defensiveCall)
@@ -131,12 +134,15 @@ class MatchPresenter(
             } while (outcome == null)
 
             val nextState = simulator.resolve(state, outcome, play.elapsedSec)
+            simulator.recordPlay(state, snap, outcome)
+            simulator.playCaller.recordPlay(state, offensivePlay, defensiveCall)
             val summary =
                 if (state.phase == GamePhase.KICKOFF) outcome.description
                 else "${outcome.description} (${offensivePlay.name} vs ${defensiveCall.name})"
             _uiState.update {
                 it.copy(
                     gameState = nextState,
+                    gameStats = simulator.gameStats,
                     isPlayRunning = false,
                     playByPlayText = if (nextState.isGameOver) "$summary That's the final whistle!" else summary,
                     ballPosition = null,
@@ -151,6 +157,12 @@ class MatchPresenter(
         }
     }
 
+    override fun callTimeout() {
+        val current = _uiState.value
+        if (current.isPlayRunning || current.gameState.isGameOver || current.gameState.phase == GamePhase.KICKOFF) return
+        _uiState.update { it.copy(gameState = it.gameState.withTimeoutCalled()) }
+    }
+
     override fun quickSim() {
         val simulator = simulator ?: return
         val current = _uiState.value
@@ -162,6 +174,7 @@ class MatchPresenter(
             _uiState.update {
                 it.copy(
                     gameState = finalState,
+                    gameStats = simulator.gameStats,
                     isPlayRunning = false,
                     players = emptyList(),
                     lineOfScrimmageY = null,
@@ -277,6 +290,8 @@ class MatchPresenter(
             PlayType.PASS -> "Ball is snapped!"
             PlayType.KICKOFF, PlayType.PUNT -> "Ready for the kick!"
             PlayType.FIELD_GOAL -> "The snap, the hold..."
+            PlayType.KNEEL -> "Victory formation..."
+            PlayType.SPIKE -> "Quick snap!"
         }
 
     private companion object {

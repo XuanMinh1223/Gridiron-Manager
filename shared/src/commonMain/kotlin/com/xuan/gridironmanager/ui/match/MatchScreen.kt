@@ -31,6 +31,10 @@ import androidx.compose.ui.unit.sp
 import com.xuan.gridironmanager.domain.model.Player
 import com.xuan.gridironmanager.domain.sim.match.GamePhase
 import com.xuan.gridironmanager.domain.sim.match.GameState
+import com.xuan.gridironmanager.domain.sim.match.GameStats
+import com.xuan.gridironmanager.domain.sim.match.passingLine
+import com.xuan.gridironmanager.domain.sim.match.receivingLine
+import com.xuan.gridironmanager.domain.sim.match.rushingLine
 import com.xuan.gridironmanager.domain.sim.movement.RunningPlayer
 import com.xuan.gridironmanager.ui.match.components.FieldCanvas
 import com.xuan.gridironmanager.ui.match.components.PlayCallPanel
@@ -63,7 +67,7 @@ fun MatchScreen(
                 modifier = Modifier.width(sidebarWidth).fillMaxHeight().verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                MatchSidebar(uiState, gameState, homeTeamName, awayTeamName, actions, onBackClicked)
+                MatchSidebar(uiState, gameState, homeTeamName, awayTeamName, homeRoster.firstOrNull()?.teamId, awayRoster.firstOrNull()?.teamId, actions, onBackClicked)
             }
 
             FieldCanvas(
@@ -119,12 +123,47 @@ private fun PersonnelCard(teamName: String, players: List<RunningPlayer>, roster
     }
 }
 
+/** Final box score: team yardage totals and the top three passers, rushers and receivers. Reads stats only. */
+@Composable
+private fun BoxScoreCard(
+    stats: GameStats,
+    homeTeamName: String,
+    awayTeamName: String,
+    homeTeamId: String?,
+    awayTeamId: String?,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Box score", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            for ((name, id) in listOf(homeTeamName to homeTeamId, awayTeamName to awayTeamId)) {
+                val totals = id?.let(stats::totalsFor) ?: continue
+                Text("$name — pass ${totals.passYards}, rush ${totals.rushYards}, return ${totals.returnYards}", style = MaterialTheme.typography.bodySmall)
+            }
+            BoxScoreSection("Passing", stats.topPassers().map { it.passingLine() })
+            BoxScoreSection("Rushing", stats.topRushers().map { it.rushingLine() })
+            BoxScoreSection("Receiving", stats.topReceivers().map { it.receivingLine() })
+        }
+    }
+}
+
+@Composable
+private fun BoxScoreSection(
+    title: String,
+    lines: List<String>,
+) {
+    if (lines.isEmpty()) return
+    Text(title, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+    lines.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+}
+
 @Composable
 private fun MatchSidebar(
     uiState: MatchUiState,
     gameState: GameState,
     homeTeamName: String,
     awayTeamName: String,
+    homeTeamId: String?,
+    awayTeamId: String?,
     actions: MatchActions,
     onBackClicked: () -> Unit,
 ) {
@@ -170,6 +209,10 @@ private fun MatchSidebar(
                     Text(situationText(gameState))
                 }
             }
+        }
+
+        if (gameState.isGameOver) {
+            BoxScoreCard(uiState.gameStats, homeTeamName, awayTeamName, homeTeamId, awayTeamId)
         }
 
         // Match controls
@@ -225,6 +268,18 @@ private fun MatchSidebar(
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text("Reset Game (Debug)")
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                // A timeout skips the clock runoff before the next snap; not available on kickoffs or mid-play
+                if (canSnap && gameState.phase != GamePhase.KICKOFF) {
+                    OutlinedButton(
+                        onClick = actions::callTimeout,
+                        enabled = gameState.possessingTimeouts > 0 && !gameState.timeoutCalled,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(if (gameState.timeoutCalled) "Timeout called" else "Timeout (${gameState.possessingTimeouts})")
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                 }

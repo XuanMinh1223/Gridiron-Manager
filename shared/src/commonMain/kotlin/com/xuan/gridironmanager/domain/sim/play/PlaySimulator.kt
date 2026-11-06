@@ -11,6 +11,7 @@ import com.xuan.gridironmanager.domain.sim.ai.QbState
 import com.xuan.gridironmanager.domain.sim.match.FieldGoalResult
 import com.xuan.gridironmanager.domain.sim.match.KickResult
 import com.xuan.gridironmanager.domain.sim.match.KickOutcomeType
+import com.xuan.gridironmanager.domain.sim.match.PlayActors
 import com.xuan.gridironmanager.domain.sim.match.PlayOutcome
 import com.xuan.gridironmanager.domain.sim.match.PlayResult
 import com.xuan.gridironmanager.domain.sim.match.Rules
@@ -53,17 +54,18 @@ class PlaySimulator(
     private val playersById = players.associateBy { it.id }
     private val gazeById = players.associate { it.id to initialGaze(it) }.toMutableMap()
 
-    private val passer = if (playType == PlayType.PASS) offense.find { it.role == PlayerRole.PASSER } else null
+    private val passer = if (playType == PlayType.PASS || playType == PlayType.SPIKE) offense.find { it.role == PlayerRole.PASSER } else null
 
     /** One seeded roll per disguised pass play: did the QB see through the shell? Always true without a disguise. */
     private val qbIdentified: Boolean =
-        if (passer != null && snap.rotation != null) qbIdentifiedOverride ?: CoverageRead.roll(passer.attributes, random) else true
+        if (playType == PlayType.PASS && passer != null && snap.rotation != null) qbIdentifiedOverride ?: CoverageRead.roll(passer.attributes, random) else true
 
     /** Whether the QB was fooled by this play's coverage disguise. */
     val qbWasFooled: Boolean get() = !qbIdentified
 
+    // A spike never reads a progression, so only a real pass play gets a brain
     private val qbBrain =
-        passer?.let {
+        passer?.takeIf { playType == PlayType.PASS }?.let {
             QbBrain(
                 qb = it,
                 progressions = snap.progression.mapNotNull { id -> playersById[id] },
@@ -78,7 +80,7 @@ class PlaySimulator(
     private var hasRotated = false
 
     /** The runner on run plays, or the receiver after a catch. */
-    private var ballCarrier = if (playType == PlayType.RUN) offense.find { it.role == PlayerRole.BALL_CARRIER } else null
+    private var ballCarrier = if (playType == PlayType.RUN || playType == PlayType.KNEEL) offense.find { it.role == PlayerRole.BALL_CARRIER } else null
     private val kicker = offense.find { it.role == PlayerRole.KICKER }
     private val holder = if (playType == PlayType.FIELD_GOAL) offense.find { it.slot == "H" } else null
     private var intendedKickTarget: Vector3D? = null
@@ -96,6 +98,8 @@ class PlaySimulator(
     private val endZoneBreakByReceiver = mutableMapOf<String, Float>()
     private val kickoffBlockerStartY = if (playType == PlayType.KICKOFF) defense.associate { it.id to it.currentPos.y } else emptyMap()
     private var carrierVelocity = Vector3D(0f, 0f, 0f)
+    private var scrambleDecided = false
+    private var isScramble = false
     private val defenderTracking = mutableMapOf<String, DefenderTrackingState>()
 
     // Elusiveness: tacklers who missed and are still recovering, and the moves that beat them
@@ -150,6 +154,8 @@ class PlaySimulator(
                 PlayType.FIELD_GOAL -> tickFieldGoal(tickDeltaSec)
                 PlayType.RUN -> tickRun()
                 PlayType.PASS -> tickPass(tickDeltaSec)
+                PlayType.KNEEL -> tickKneel()
+                PlayType.SPIKE -> tickSpike()
             }
 
         return outcome ?: if (elapsedSec >= MAX_PLAY_DURATION_SEC) whistleDead() else null
@@ -169,7 +175,7 @@ class PlaySimulator(
                 if (playType == PlayType.PUNT && defense.any { it.role == PlayerRole.PASS_RUSHER && it.currentPos.distance2DTo(kicker.currentPos) <= PUNT_BLOCK_RADIUS_YDS }) {
                     val spot = receivingYardLine(kicker.currentPos)
                 val recoverer = (defense + offense).filter { it !== kicker }.minByOrNull { it.currentPos.distance2DTo(kicker.currentPos) }
-                    return kickOutcome(spot, "Punt BLOCKED and recovered!", false, false, spot, spot, KickOutcomeType.BLOCKED_RECOVERED, recoverer?.isOffense == true)
+                    return kickOutcome(spot, "Punt BLOCKED and recovered!", false, false, spot, spot, KickOutcomeType.BLOCKED_RECOVERED, recoverer?.isOffense == true, recoverer)
                 }
                 kickContactSec = elapsedSec
                 kickPhase = KickPhase.FLIGHT
@@ -402,7 +408,7 @@ class PlaySimulator(
         if (playType == PlayType.PUNT && random.nextFloat() < PUNT_MUFF_CHANCE) {
             val recoverer = (offense + defense).filter { it.currentPos.distance2DTo(ball) <= LOOSE_BALL_RECOVERY_RADIUS_YDS }.minByOrNull { it.currentPos.distance2DTo(ball) }
                 ?: (offense + defense).minByOrNull { it.currentPos.distance2DTo(ball) }
-            return kickOutcome(kickLandingYardLine, "Punt muffed and recovered!", false, false, intendedLandingYardLine, kickLandingYardLine, KickOutcomeType.MUFF_RECOVERED, recoverer?.isOffense == true)
+            return kickOutcome(kickLandingYardLine, "Punt muffed and recovered!", false, false, intendedLandingYardLine, kickLandingYardLine, KickOutcomeType.MUFF_RECOVERED, recoverer?.isOffense == true, recoverer)
         }
         if (playType == PlayType.PUNT && offense.any { it.currentPos.distance2DTo(ball) <= FAIR_CATCH_COVERAGE_RADIUS_YDS } && random.nextFloat() < FAIR_CATCH_CHANCE) {
             return kickOutcome(kickLandingYardLine, "Fair catch at the $kickLandingYardLine.", false, false, intendedLandingYardLine, kickLandingYardLine, KickOutcomeType.FAIR_CATCH)
@@ -443,7 +449,7 @@ class PlaySimulator(
                 if (random.nextFloat() < RETURN_FUMBLE_CHANCE) {
                     val recoverer = (offense + defense).filter { it.currentPos.distance2DTo(returner.currentPos) <= LOOSE_BALL_RECOVERY_RADIUS_YDS }
                         .minByOrNull { it.currentPos.distance2DTo(returner.currentPos) } ?: coverPlayer
-                    return kickOutcome(yardLine, "Return fumble recovered!", false, false, outcomeType = KickOutcomeType.RETURN_FUMBLE_RECOVERED, recoveredByKickingTeam = recoverer.isOffense)
+                    return kickOutcome(yardLine, "Return fumble recovered!", false, false, outcomeType = KickOutcomeType.RETURN_FUMBLE_RECOVERED, recoveredByKickingTeam = recoverer.isOffense, recoverer = recoverer)
                 }
                 return kickOutcome(yardLine, "Kick returned $returnYards yards to the $yardLine.", false, false, outcomeType = KickOutcomeType.RETURN_TACKLED)
             }
@@ -495,8 +501,11 @@ class PlaySimulator(
         landingYardLine: Int = kickLandingYardLine,
         outcomeType: KickOutcomeType,
         recoveredByKickingTeam: Boolean = false,
+        recoverer: RunningPlayer? = null,
     ) = PlayOutcome.Kick(
         KickResult(
+            returnerId = kickReturner?.id,
+            recovererId = recoverer?.id,
             endYardLine = endYardLine,
             description = description,
             isTouchback = isTouchback,
@@ -567,7 +576,7 @@ class PlaySimulator(
                 }
             }
 
-        fieldGoalResult = FieldGoalResult(isGood, distance, description)
+        fieldGoalResult = FieldGoalResult(isGood, distance, description, kickerId = kicker.id)
         throwTimeSec = elapsedSec
         ballTrajectory =
             BallTrajectory(
@@ -576,6 +585,22 @@ class PlaySimulator(
                 totalFlightTimeSec = (contact.distance2DTo(target) / KICK_SPEED_YDS_PER_SEC).coerceAtLeast(MIN_KICK_FLIGHT_SEC),
                 apexHeightYards = if (isBlocked) 1f else FIELD_GOAL_APEX_YDS,
             )
+    }
+
+    /** The QB takes a knee: a yard lost, and the clock keeps running (the normal between-play runoff applies). */
+    private fun tickKneel(): PlayOutcome? {
+        if (elapsedSec < KNEEL_SEC) return null
+        return PlayOutcome.Scrimmage(
+            PlayResult(-1, "QB takes a knee.", isTouchdown = false, isTurnover = false, actors = PlayActors(carrierId = ballCarrier?.id)),
+        )
+    }
+
+    /** The QB spikes it into the turf: an incomplete pass that stops the clock, so no runoff. */
+    private fun tickSpike(): PlayOutcome? {
+        if (elapsedSec < SPIKE_SEC) return null
+        return PlayOutcome.Scrimmage(
+            PlayResult(0, "Spike to stop the clock.", isTouchdown = false, isTurnover = false, clockStops = true, actors = PlayActors(passerId = passer?.id)),
+        )
     }
 
     private fun tickRun(): PlayOutcome? {
@@ -594,7 +619,13 @@ class PlaySimulator(
         if (snap.losYardLine + yardsGained >= Rules.FIELD_LENGTH_YDS) {
             val touchdownYards = Rules.FIELD_LENGTH_YDS - snap.losYardLine
             val description = if (isCatch) "TOUCHDOWN! $touchdownYards-yard catch and run!" else "TOUCHDOWN! $touchdownYards-yard run!"
-            return touchdown(yardsGained, withBrokenTackles(description))
+            return touchdown(
+                yardsGained,
+                withBrokenTackles(description),
+                actors = carrierActors(carrier, isCatch),
+                isPassComplete = isCatch,
+                isScramble = isScramble,
+            )
         }
 
         for (defender in defense) {
@@ -607,13 +638,28 @@ class PlaySimulator(
             val chance = tackleChance(defender, carrier) * (if (isEngaged) ENGAGED_TACKLE_FACTOR else 1f)
             if (random.nextFloat() < chance) {
                 val description = withBrokenTackles(if (isCatch) "Pass complete for $yardsGained yards!" else "Run for $yardsGained yards.")
-                return fumbleOrNull(carrier, defender, yardsGained, FUMBLE_CHANCE)
-                    ?: PlayOutcome.Scrimmage(PlayResult(yardsGained, description, isTouchdown = false, isTurnover = false))
+                val actors = carrierActors(carrier, isCatch, defender)
+                return fumbleOrNull(carrier, defender, yardsGained, FUMBLE_CHANCE, actors, isPassComplete = isCatch, isScramble = isScramble)
+                    ?: PlayOutcome.Scrimmage(
+                        PlayResult(yardsGained, description, isTouchdown = false, isTurnover = false, actors = actors, isPassComplete = isCatch, isScramble = isScramble),
+                    )
             }
             evadeTackle(carrier, defender)
         }
         return null
     }
+
+    /** Actors for a play where [carrier] has the ball: a receiver after a catch, a scrambling QB, or a runner. */
+    private fun carrierActors(
+        carrier: RunningPlayer,
+        isCatch: Boolean,
+        tackler: RunningPlayer? = null,
+    ) = PlayActors(
+        passerId = if (isCatch) passer?.id else null,
+        receiverId = if (isCatch) carrier.id else null,
+        carrierId = carrier.id,
+        tacklerId = tackler?.id,
+    )
 
     /** Better tacklers bring the carrier down more often; shifty or powerful carriers slip more tackles. */
     private fun tackleChance(
@@ -655,14 +701,35 @@ class PlaySimulator(
             else -> "${description.dropLast(1)}, breaking $brokenTackles tackles!"
         }
 
+    /**
+     * One seeded roll, the first time a pressured QB has a free rusher on him: a fast QB tucks it and runs. Checked before
+     * the QB's read each tick, because the brain treats any pressure as out-of-time and forces a throw. The window is
+     * the band between the sack radius and the pressure radius, since a rusher inside the sack radius gets him first.
+     * The QB's role is not mutated: he becomes the ball carrier, and [isScramble] switches the descriptions to a run.
+     */
+    private fun maybeScramble(qb: RunningPlayer): Boolean {
+        if (scrambleDecided || elapsedSec < SCRAMBLE_MIN_SEC) return false
+        val rushers = defense.filterNot(::isBlocked).map { qb.currentPos.distance2DTo(it.currentPos) }
+        if (rushers.any { it <= QbBrain.SACK_RADIUS_YDS } || rushers.none { it <= QbBrain.PRESSURE_RADIUS_YDS }) return false
+
+        scrambleDecided = true
+        val scrambleChance = (qb.attributes.speed / 150f).coerceIn(0.20f, 0.65f)
+        if (random.nextFloat() >= scrambleChance) return false
+        ballCarrier = qb
+        isScramble = true
+        carrierVelocity = Vector3D(0f, 0f, 0f)
+        return true
+    }
+
     private fun tickPass(tickDeltaSec: Float): PlayOutcome? {
-        ballCarrier?.let { return tickBallCarrier(it, isCatch = true) }
+        ballCarrier?.let { return tickBallCarrier(it, isCatch = !isScramble) }
 
         val qb = passer ?: return whistleDead()
         val brain = qbBrain ?: return whistleDead()
 
         if (ballTrajectory == null) {
             ballPosition = qb.currentPos
+            if (maybeScramble(qb)) return tickBallCarrier(qb, isCatch = false)
             brain.evaluateTick(defense.filterNot(::isBlocked), tickDeltaSec)?.let { throwCommand ->
                 if (throwCommand.isThrowAway) return incomplete("Nobody open, the pass is thrown away.")
                 ballTrajectory = withThrowError(throwCommand.trajectory, qb.attributes.throwAccuracy)
@@ -674,9 +741,17 @@ class PlaySimulator(
             if (brain.state == QbState.SACKED) {
                 val yardsLost = (-yardsFromLos(qb.currentPos.y)).coerceAtLeast(0)
                 val sacker = defense.minByOrNull { it.currentPos.distance2DTo(qb.currentPos) } ?: return whistleDead()
-                return fumbleOrNull(qb, sacker, -yardsLost, STRIP_SACK_CHANCE)
+                val actors = PlayActors(passerId = qb.id, carrierId = qb.id, tacklerId = sacker.id)
+                return fumbleOrNull(qb, sacker, -yardsLost, STRIP_SACK_CHANCE, actors, isSack = true)
                     ?: PlayOutcome.Scrimmage(
-                        PlayResult(-yardsLost, "QB is SACKED for a loss of $yardsLost yards!", isTouchdown = false, isTurnover = false),
+                        PlayResult(
+                            -yardsLost,
+                            "QB is SACKED for a loss of $yardsLost yards!",
+                            isTouchdown = false,
+                            isTurnover = false,
+                            actors = actors,
+                            isSack = true,
+                        ),
                     )
             }
         }
@@ -696,7 +771,8 @@ class PlaySimulator(
                         ball.z <= it.verticalReach.maxCatchHeightYards
                 }
             if (undercut != null) {
-                return if (random.nextBoolean()) interception(ball) else incomplete("Pass batted down!")
+                val pickChance = interceptionChance(undercut.attributes.catching, undercut.attributes.awareness)
+                return if (random.nextFloat() < pickChance) interception(ball, undercut) else incomplete("Pass batted down!")
             }
         }
 
@@ -716,13 +792,20 @@ class PlaySimulator(
         val contest = (1f - nearestDefenderYds / CONTEST_RADIUS_YDS).coerceIn(0f, 1f)
         val roll = random.nextFloat()
         when {
-            roll < contest * CONTESTED_INTERCEPTION_CHANCE -> return interception(ball)
+            roll < contest * CONTESTED_INTERCEPTION_CHANCE -> return interception(ball, defense.minByOrNull { it.currentPos.distance2DTo(ball) })
             roll < contest * (CONTESTED_INTERCEPTION_CHANCE + CONTESTED_BREAKUP_CHANCE) -> return incomplete("Pass broken up!")
         }
-        val catchChance = BASE_CATCH_CHANCE + (receiver.attributes.catching - 75) / 300f
+        val catchChance = catchChance(receiver.attributes.catching)
         if (random.nextFloat() >= catchChance) return incomplete("Dropped pass!")
 
-        if (catchYardLine >= Rules.FIELD_LENGTH_YDS) return touchdown(yardsGained, "TOUCHDOWN! Pass complete in the end zone!")
+        if (catchYardLine >= Rules.FIELD_LENGTH_YDS) {
+            return touchdown(
+                yardsGained,
+                "TOUCHDOWN! Pass complete in the end zone!",
+                actors = carrierActors(receiver, isCatch = true),
+                isPassComplete = true,
+            )
+        }
 
         // Caught: the receiver turns upfield and everyone chases
         receiver.currentPos = ball.copy(z = 0f)
@@ -879,8 +962,19 @@ class PlaySimulator(
         var hasLocatedBall: Boolean,
     )
 
-    private fun interception(ball: Vector3D) =
-        PlayOutcome.Scrimmage(PlayResult(yardsFromLos(ball.y), "INTERCEPTED!", isTouchdown = false, isTurnover = true, clockStops = true))
+    private fun interception(
+        ball: Vector3D,
+        interceptor: RunningPlayer?,
+    ) = PlayOutcome.Scrimmage(
+        PlayResult(
+            yardsFromLos(ball.y),
+            "INTERCEPTED!",
+            isTouchdown = false,
+            isTurnover = true,
+            clockStops = true,
+            actors = PlayActors(passerId = passer?.id, receiverId = targetReceiver?.id, interceptorId = interceptor?.id),
+        ),
+    )
 
     /**
      * The ball comes loose with a chance scaled by the hitter's tackling against the ball carrier's strength.
@@ -891,16 +985,79 @@ class PlaySimulator(
         hitter: RunningPlayer,
         yardsGained: Int,
         baseChance: Float,
+        actors: PlayActors,
+        isPassComplete: Boolean = false,
+        isScramble: Boolean = false,
+        isSack: Boolean = false,
     ): PlayOutcome? {
         val chance = baseChance * hitter.attributes.tackle / carrier.attributes.strength.coerceAtLeast(1)
         if (random.nextFloat() >= chance) return null
 
-        return if (random.nextBoolean()) {
-            PlayOutcome.Scrimmage(PlayResult(yardsGained, "FUMBLE! Recovered by the defense!", isTouchdown = false, isTurnover = true, clockStops = true))
+        val recovery = resolveFumbleRecovery(carrier)
+        val withRecoverer = actors.copy(recovererId = recovery.recoverer?.id)
+        return if (recovery.defenseRecovers) {
+            PlayOutcome.Scrimmage(
+                PlayResult(
+                    yardsGained,
+                    "FUMBLE! Recovered by the defense!",
+                    isTouchdown = false,
+                    isTurnover = true,
+                    clockStops = true,
+                    actors = withRecoverer,
+                    isSack = isSack,
+                    isPassComplete = isPassComplete,
+                    isScramble = isScramble,
+                ),
+            )
         } else {
-            PlayOutcome.Scrimmage(PlayResult(yardsGained, "Fumble, but the offense falls on it.", isTouchdown = false, isTurnover = false))
+            PlayOutcome.Scrimmage(
+                PlayResult(
+                    yardsGained,
+                    "Fumble, but the offense falls on it.",
+                    isTouchdown = false,
+                    isTurnover = false,
+                    actors = withRecoverer,
+                    isSack = isSack,
+                    isPassComplete = isPassComplete,
+                    isScramble = isScramble,
+                ),
+            )
         }
     }
+
+    /** Who comes up with a loose ball, and which player of that side it is (null if nobody of that side is close). */
+    internal data class FumbleRecovery(
+        val defenseRecovers: Boolean,
+        val recoverer: RunningPlayer?,
+    )
+
+    /**
+     * The fumble spot is the carrier's position. Everyone within [LOOSE_BALL_RECOVERY_RADIUS_YDS] is in the scrum, each
+     * weighted by awareness; the defense recovers with the share of the weight it holds. The nearest player of the
+     * winning side gets the ball. With nobody around it is a coin flip.
+     */
+    internal fun resolveFumbleRecovery(carrier: RunningPlayer): FumbleRecovery {
+        val spot = carrier.currentPos
+        val nearby = (offense + defense).filter { it.currentPos.distance2DTo(spot) <= LOOSE_BALL_RECOVERY_RADIUS_YDS }
+
+        fun weight(player: RunningPlayer) = 1f + player.attributes.awareness / 100f
+        val defenseWeight = nearby.filter { !it.isOffense }.sumOf { weight(it).toDouble() }.toFloat()
+        val offenseWeight = nearby.filter { it.isOffense }.sumOf { weight(it).toDouble() }.toFloat()
+        val total = defenseWeight + offenseWeight
+
+        val defenseRecovers = if (total == 0f) random.nextBoolean() else random.nextFloat() < defenseWeight / total
+        val recoverer = nearby.filter { it.isOffense != defenseRecovers }.minByOrNull { it.currentPos.distance2DTo(spot) }
+        return FumbleRecovery(defenseRecovers, recoverer)
+    }
+
+    /** Chance a defender under a throw picks it off rather than only batting it down. */
+    internal fun interceptionChance(
+        catching: Int,
+        awareness: Int,
+    ): Float = (0.35f + (catching + awareness - 100) / 400f).coerceIn(0.15f, 0.75f)
+
+    /** Chance a receiver hauls in a catchable ball: clamped so even a 99-catching receiver can drop one. */
+    internal fun catchChance(catching: Int): Float = (BASE_CATCH_CHANCE + (catching - 75) / 300f).coerceIn(0.50f, 0.99f)
 
     /** Scatters the intended catch point within the QB's accuracy radius for that distance. */
     private fun withThrowError(
@@ -929,14 +1086,42 @@ class PlaySimulator(
     private fun touchdown(
         yardsGained: Int,
         description: String,
-    ) = PlayOutcome.Scrimmage(PlayResult(yardsGained, description, isTouchdown = true, isTurnover = false, clockStops = true))
+        actors: PlayActors = PlayActors(),
+        isPassComplete: Boolean = false,
+        isScramble: Boolean = false,
+    ) = PlayOutcome.Scrimmage(
+        PlayResult(
+            yardsGained,
+            description,
+            isTouchdown = true,
+            isTurnover = false,
+            clockStops = true,
+            actors = actors,
+            isPassComplete = isPassComplete,
+            isScramble = isScramble,
+        ),
+    )
 
-    private fun incomplete(description: String) = PlayOutcome.Scrimmage(PlayResult(0, description, isTouchdown = false, isTurnover = false, clockStops = true))
+    /** An incomplete pass: the passer threw it (an attempt), whoever it was meant for is recorded if there was a target. */
+    private fun incomplete(description: String) =
+        PlayOutcome.Scrimmage(
+            PlayResult(
+                0,
+                description,
+                isTouchdown = false,
+                isTurnover = false,
+                clockStops = true,
+                actors = PlayActors(passerId = passer?.id, receiverId = targetReceiver?.id),
+            ),
+        )
 
     private fun whistleDead() = PlayOutcome.Scrimmage(PlayResult(0, "Play whistled dead.", isTouchdown = false, isTurnover = false, clockStops = true))
 
     companion object {
         const val MAX_PLAY_DURATION_SEC = 15f // Safety timeout
+        private const val SCRAMBLE_MIN_SEC = 1.0f
+        private const val KNEEL_SEC = 0.5f
+        private const val SPIKE_SEC = 0.3f
         private const val KICK_APEX_YDS = 30f
         private const val END_ZONE_BACKLINE_MARGIN_YDS = 1f
         private const val END_ZONE_CROSS_TARGET_YDS = 15f

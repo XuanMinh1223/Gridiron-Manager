@@ -6,6 +6,19 @@ import kotlin.test.assertTrue
 
 class AttributeTranslatorTest {
     @Test
+    fun testPassSpeedFollowsThrowPower() {
+        assertEquals(20.0f, AttributeTranslator.calculatePassSpeedYdsPerSec(50), 0.01f)
+        assertEquals(21.2f, AttributeTranslator.calculatePassSpeedYdsPerSec(80), 0.01f)
+        assertEquals(21.96f, AttributeTranslator.calculatePassSpeedYdsPerSec(99), 0.01f)
+    }
+
+    @Test
+    fun testMaxThrowDistanceFollowsThrowPower() {
+        assertEquals(47.5f, AttributeTranslator.calculateMaxThrowDistanceYds(50), 0.01f)
+        assertEquals(59.75f, AttributeTranslator.calculateMaxThrowDistanceYds(99), 0.01f)
+    }
+
+    @Test
     fun testCalculateSpeedYardsPerSec() {
         assertEquals(10.0f, AttributeTranslator.calculateSpeedYardsPerSec(99), 0.001f)
         assertEquals(4.0f, AttributeTranslator.calculateSpeedYardsPerSec(0), 0.001f)

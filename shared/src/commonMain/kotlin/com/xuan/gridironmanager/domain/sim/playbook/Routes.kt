@@ -38,4 +38,7 @@ object Routes {
     val INSIDE_ZONE = route("Inside Zone", 1 to 4)
     val OUTSIDE_ZONE = route("Outside Zone", 5 to 4, 9 to 8)
     val DRAW = route("Draw", 0 to 1, 0 to 3)
+
+    /** The QB takes a knee: one yard straight back. */
+    val KNEEL = route("Kneel", 0 to -1)
 }

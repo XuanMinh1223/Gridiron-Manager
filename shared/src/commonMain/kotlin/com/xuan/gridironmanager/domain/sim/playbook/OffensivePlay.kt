@@ -13,6 +13,8 @@ enum class PlayCategory(
     EXTRA_POINT("Extra Point"),
     PUNT("Punt"),
     KICKOFF("Kickoff"),
+    KNEEL("Kneel"),
+    SPIKE("Spike"),
 }
 
 data class OffensivePlay(
@@ -33,7 +35,7 @@ data class OffensivePlay(
         require(slots.containsAll(progression)) { "$name reads slots not in ${formation.name}" }
         require(progression.all { it in routes }) { "$name reads a slot that has no route" }
         require(ballCarrierSlot == null || ballCarrierSlot in routes) { "$name has no path for its ball carrier" }
-        require((type == PlayType.RUN) == (ballCarrierSlot != null)) { "Run plays, and only run plays, have a ball carrier" }
+        require((type == PlayType.RUN || type == PlayType.KNEEL) == (ballCarrierSlot != null)) { "Run and kneel plays, and only those, have a ball carrier" }
         require((type == PlayType.PASS) == progression.isNotEmpty()) { "Pass plays, and only pass plays, have a progression" }
     }
 }

@@ -1,5 +1,6 @@
 package com.xuan.gridironmanager.domain.sim.ai
 
+import com.xuan.gridironmanager.domain.sim.AttributeTranslator
 import com.xuan.gridironmanager.domain.sim.BallTrajectory
 import com.xuan.gridironmanager.domain.sim.movement.MovementEngine
 import com.xuan.gridironmanager.domain.sim.movement.RunningPlayer
@@ -72,23 +73,44 @@ class QbBrain(
         val readsSoFar = if (elapsedSec < dropbackSec + readDelaySec) 0 else 1 + ((elapsedSec - dropbackSec - readDelaySec) / READ_TIME_SEC).toInt()
         gazeTargetId = progressions.getOrNull((readsSoFar - 1).coerceIn(0, progressions.lastIndex.coerceAtLeast(0)))?.id
 
-        val reads = progressions.map { receiver -> planThrow(receiver).let { Read(receiver, it, separationAtCatch(it, defenders)) } }
+        // Receivers beyond the QB's arm are unreadable. They keep their place in the read order (so the cadence of reads
+        // doesn't shift) but are never the open read, and never the best-available read at force-throw.
+        // Honest note: generated QBs have 80-99 throwPower (55-60 yd range) and the longest route is 35 yards, so range
+        // almost never binds on generated rosters. Velocity is the real effect; range guards edited or custom rosters.
+        val maxRangeYds = AttributeTranslator.calculateMaxThrowDistanceYds(qb.attributes.throwPower)
+        val reads =
+            progressions.map { receiver ->
+                val trajectory = planThrow(receiver)
+                Read(receiver, trajectory, separationAtCatch(trajectory, defenders), inRange = qb.currentPos.distance2DTo(receiver.currentPos) <= maxRangeYds)
+            }
         val isPressured = defenders.any { qb.currentPos.distance2DTo(it.currentPos) <= PRESSURE_RADIUS_YDS }
         val isOutOfTime = elapsedSec >= forceThrowSec || isPressured
 
         // One read at a time: the QB gets to the next receiver every READ_TIME_SEC, so the checkdown comes last
-        val openRead = reads.take(readsSoFar).firstOrNull { it.separationYds >= requiredSeparation() }
-        val read = openRead ?: (if (isOutOfTime) reads.maxByOrNull { it.separationYds } else null) ?: return null
+        val openRead = reads.take(readsSoFar).firstOrNull { it.inRange && it.separationYds >= requiredSeparation() }
+        val read = openRead ?: (if (isOutOfTime) reads.filter { it.inRange }.maxByOrNull { it.separationYds } else null) ?: return throwAwayIfOutOfTime(isOutOfTime, reads)
 
         state = QbState.THROWING
         val command = ThrowCommand(read.receiver.id, read.trajectory)
         return if (isOutOfTime && read.separationYds < MIN_THROWABLE_SEPARATION_YDS) command.copy(isThrowAway = true) else command
     }
 
+    /** Out of time with nobody in range: throw it away at the first read, as a QB with nobody open does. */
+    private fun throwAwayIfOutOfTime(
+        isOutOfTime: Boolean,
+        reads: List<Read>,
+    ): ThrowCommand? {
+        val first = reads.firstOrNull() ?: return null
+        if (!isOutOfTime) return null
+        state = QbState.THROWING
+        return ThrowCommand(first.receiver.id, first.trajectory, isThrowAway = true)
+    }
+
     private data class Read(
         val receiver: RunningPlayer,
         val trajectory: BallTrajectory,
         val separationYds: Float,
+        val inRange: Boolean = true,
     )
 
     /** The window the QB needs: wide open early in the down, narrowing to a tight window by [forceThrowSec]. */
@@ -113,7 +135,8 @@ class QbBrain(
 
     /** Leads [receiver] to where they will be on their route when the ball arrives. */
     fun planThrow(receiver: RunningPlayer): BallTrajectory {
-        val flightTimeSec = (qb.currentPos.distance2DTo(receiver.currentPos) / PASS_SPEED_YDS_PER_SEC).coerceAtLeast(MIN_FLIGHT_SEC)
+        val passSpeedYdsPerSec = AttributeTranslator.calculatePassSpeedYdsPerSec(qb.attributes.throwPower)
+        val flightTimeSec = (qb.currentPos.distance2DTo(receiver.currentPos) / passSpeedYdsPerSec).coerceAtLeast(MIN_FLIGHT_SEC)
         val leadPos = MovementEngine.predictPosition(receiver, flightTimeSec)
 
         return BallTrajectory(
@@ -127,14 +150,13 @@ class QbBrain(
     companion object {
         const val DEFAULT_DROPBACK_SEC = 0.6f
         const val DEFAULT_FORCE_THROW_SEC = 2.6f
-        private const val SACK_RADIUS_YDS = 1.5f
-        private const val PRESSURE_RADIUS_YDS = 3f
+        const val SACK_RADIUS_YDS = 1.5f
+        const val PRESSURE_RADIUS_YDS = 3f
         private const val READ_TIME_SEC = 0.4f
         private const val OPEN_EARLY_SEPARATION_YDS = 3f
         private const val OPEN_LATE_SEPARATION_YDS = 1.5f
         private const val MIN_THROWABLE_SEPARATION_YDS = 0.3f
         private const val DEFENDER_REACTION_SEC = 0.3f
-        private const val PASS_SPEED_YDS_PER_SEC = 20f
         private const val MIN_FLIGHT_SEC = 0.1f
         private const val RELEASE_HEIGHT_YDS = 2.0f
         private const val CATCH_HEIGHT_YDS = 1.2f

@@ -13,6 +13,9 @@ interface MatchActions {
 
     fun snapBall()
 
+    /** Calls a timeout for the team with the ball: it skips the clock runoff before the next snap. Does not snap. */
+    fun callTimeout()
+
     fun setShowAssignments(enabled: Boolean)
 
     fun setDebugMode(enabled: Boolean)
