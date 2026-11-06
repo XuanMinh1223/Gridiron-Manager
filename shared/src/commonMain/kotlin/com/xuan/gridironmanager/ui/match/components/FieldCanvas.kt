@@ -32,19 +32,20 @@ private const val MAX_ZOOM = 3f
 
 private const val END_ZONE_DEPTH_YDS = 10f
 private const val FIELD_LENGTH_WITH_END_ZONES_YDS = 120f
-private const val ZONE_MARKER_RADIUS_YDS = 4f
+// Shared with the play preview cards so their diagrams use the field's visual language
+internal const val ZONE_MARKER_RADIUS_YDS = 4f
 
-private val GrassColor = Color(0xFF2E7D32)
+internal val GrassColor = Color(0xFF2E7D32)
 private val EndZoneColor = Color(0xFF1B5E20)
-private val LineOfScrimmageColor = Color(0xFF4FC3F7)
+internal val LineOfScrimmageColor = Color(0xFF4FC3F7)
 private val FirstDownColor = Color(0xFFFFEB3B)
-private val OffenseColor = Color(0xFF0D47A1)
-private val DefenseColor = Color(0xFFC62828)
-private val RouteColor = Color(0xFFFFF176)
+internal val OffenseColor = Color(0xFF0D47A1)
+internal val DefenseColor = Color(0xFFC62828)
+internal val RouteColor = Color(0xFFFFF176)
 private val ManLinkColor = Color.White.copy(alpha = 0.7f)
-private val DeepZoneColor = Color(0xFF42A5F5)
-private val UnderneathZoneColor = Color(0xFFFFCA28)
-private val BlitzColor = Color(0xFFFF5252)
+internal val DeepZoneColor = Color(0xFF42A5F5)
+internal val UnderneathZoneColor = Color(0xFFFFCA28)
+internal val BlitzColor = Color(0xFFFF5252)
 private val BlockColor = Color(0xFFFF9800)
 
 /**
@@ -232,7 +233,7 @@ private fun DrawScope.drawArrow(
     drawArrowHead(from, to, color)
 }
 
-private fun DrawScope.drawArrowHead(
+internal fun DrawScope.drawArrowHead(
     from: Offset,
     to: Offset,
     color: Color,
