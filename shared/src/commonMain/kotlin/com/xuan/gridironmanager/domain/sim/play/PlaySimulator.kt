@@ -12,6 +12,10 @@ import com.xuan.gridironmanager.domain.sim.match.FieldGoalResult
 import com.xuan.gridironmanager.domain.sim.match.KickResult
 import com.xuan.gridironmanager.domain.sim.match.KickOutcomeType
 import com.xuan.gridironmanager.domain.sim.match.PlayActors
+import com.xuan.gridironmanager.domain.sim.match.PlayDebugTrace
+import com.xuan.gridironmanager.domain.sim.match.at
+import com.xuan.gridironmanager.domain.sim.match.fixed
+import com.xuan.gridironmanager.domain.sim.match.formatYardLine
 import com.xuan.gridironmanager.domain.sim.match.PlayOutcome
 import com.xuan.gridironmanager.domain.sim.match.PlayResult
 import com.xuan.gridironmanager.domain.sim.match.Rules
@@ -36,6 +40,8 @@ class PlaySimulator(
     private val random: Random = Random.Default,
     /** A pre-snap coverage read already rolled for this play (the human QB's, shown as a hint); null to roll here. */
     qbIdentifiedOverride: Boolean? = null,
+    /** Diagnostic trace for this play, or null (the default) when debugging is off. Appended to, never read back. */
+    private val trace: PlayDebugTrace? = null,
 ) {
     private val offense = snap.offense
     private val defense = snap.defense
@@ -71,6 +77,7 @@ class PlaySimulator(
                 progressions = snap.progression.mapNotNull { id -> playersById[id] },
                 readDelaySec = if (qbIdentified) 0f else CoverageRead.FOOLED_READ_DELAY_SEC,
                 recoverAtSec = (snap.rotation?.rotationSec ?: 0f) + recognitionDelaySec(it.attributes.awareness.coerceIn(0, 100)),
+                trace = trace,
             )
         }
 
@@ -85,7 +92,16 @@ class PlaySimulator(
     private val holder = if (playType == PlayType.FIELD_GOAL) offense.find { it.slot == "H" } else null
     private var intendedKickTarget: Vector3D? = null
 
-    private val blocking = BlockingModel(offense, defense, playType, random)
+    private val blocking =
+        BlockingModel(offense, defense, playType, random).also { model ->
+            if (trace != null) model.onShed = { defender, blocker -> trace.at(elapsedSec, "${label(defender)} sheds ${label(blocker)}") }
+        }
+
+    private fun label(player: RunningPlayer) = player.slot ?: player.id
+
+    private inline fun log(text: () -> String) {
+        trace?.at(elapsedSec, text())
+    }
 
     private var ballTrajectory: BallTrajectory? = null
     private var throwTimeSec = 0f
@@ -130,7 +146,19 @@ class PlaySimulator(
         }
     }
 
-    fun tick(tickDeltaSec: Float): PlayOutcome? {
+    fun tick(tickDeltaSec: Float): PlayOutcome? = advance(tickDeltaSec)?.let(::withTrace)
+
+    /** Hands the finished play's trace to the outcome. A no-op when debugging is off (there is no trace). */
+    private fun withTrace(outcome: PlayOutcome): PlayOutcome {
+        val trace = trace ?: return outcome
+        if (outcome is PlayOutcome.Kick) {
+            val kick = outcome.result
+            trace.at(elapsedSec, "kick: ${kick.outcomeType} landing ${formatYardLine(kick.landingYardLine)} return ${kick.returnYards} yd")
+        }
+        return if (outcome is PlayOutcome.Scrimmage) PlayOutcome.Scrimmage(outcome.result.copy(debugTrace = trace.lines())) else outcome
+    }
+
+    private fun advance(tickDeltaSec: Float): PlayOutcome? {
         elapsedSec += tickDeltaSec
 
         if (playType == PlayType.KICKOFF || playType == PlayType.PUNT) {
@@ -590,6 +618,7 @@ class PlaySimulator(
     /** The QB takes a knee: a yard lost, and the clock keeps running (the normal between-play runoff applies). */
     private fun tickKneel(): PlayOutcome? {
         if (elapsedSec < KNEEL_SEC) return null
+        log { "kneel" }
         return PlayOutcome.Scrimmage(
             PlayResult(-1, "QB takes a knee.", isTouchdown = false, isTurnover = false, actors = PlayActors(carrierId = ballCarrier?.id)),
         )
@@ -598,6 +627,7 @@ class PlaySimulator(
     /** The QB spikes it into the turf: an incomplete pass that stops the clock, so no runoff. */
     private fun tickSpike(): PlayOutcome? {
         if (elapsedSec < SPIKE_SEC) return null
+        log { "spike" }
         return PlayOutcome.Scrimmage(
             PlayResult(0, "Spike to stop the clock.", isTouchdown = false, isTurnover = false, clockStops = true, actors = PlayActors(passerId = passer?.id)),
         )
@@ -637,6 +667,7 @@ class PlaySimulator(
 
             val chance = tackleChance(defender, carrier) * (if (isEngaged) ENGAGED_TACKLE_FACTOR else 1f)
             if (random.nextFloat() < chance) {
+                log { "tackled by ${label(defender)} at ${formatYardLine(snap.losYardLine + yardsGained)}" }
                 val description = withBrokenTackles(if (isCatch) "Pass complete for $yardsGained yards!" else "Run for $yardsGained yards.")
                 val actors = carrierActors(carrier, isCatch, defender)
                 return fumbleOrNull(carrier, defender, yardsGained, FUMBLE_CHANCE, actors, isPassComplete = isCatch, isScramble = isScramble)
@@ -714,7 +745,9 @@ class PlaySimulator(
 
         scrambleDecided = true
         val scrambleChance = (qb.attributes.speed / 150f).coerceIn(0.20f, 0.65f)
-        if (random.nextFloat() >= scrambleChance) return false
+        val scrambleRoll = random.nextFloat() // the one draw, exactly as before: logged after it is made, never rolled for the log
+        log { "scramble roll p=${scrambleChance.fixed(2)} roll=${scrambleRoll.fixed(2)} → ${if (scrambleRoll < scrambleChance) "SCRAMBLE" else "STAY"}" }
+        if (scrambleRoll >= scrambleChance) return false
         ballCarrier = qb
         isScramble = true
         carrierVelocity = Vector3D(0f, 0f, 0f)
@@ -772,7 +805,9 @@ class PlaySimulator(
                 }
             if (undercut != null) {
                 val pickChance = interceptionChance(undercut.attributes.catching, undercut.attributes.awareness)
-                return if (random.nextFloat() < pickChance) interception(ball, undercut) else incomplete("Pass batted down!")
+                val pickRoll = random.nextFloat()
+                log { "lane: ${label(undercut)} gets a hand on it, p=${pickChance.fixed(2)} roll=${pickRoll.fixed(2)} → ${if (pickRoll < pickChance) "INTERCEPTED" else "BATTED DOWN"}" }
+                return if (pickRoll < pickChance) interception(ball, undercut) else incomplete("Pass batted down!")
             }
         }
 
@@ -792,11 +827,20 @@ class PlaySimulator(
         val contest = (1f - nearestDefenderYds / CONTEST_RADIUS_YDS).coerceIn(0f, 1f)
         val roll = random.nextFloat()
         when {
-            roll < contest * CONTESTED_INTERCEPTION_CHANCE -> return interception(ball, defense.minByOrNull { it.currentPos.distance2DTo(ball) })
-            roll < contest * (CONTESTED_INTERCEPTION_CHANCE + CONTESTED_BREAKUP_CHANCE) -> return incomplete("Pass broken up!")
+            roll < contest * CONTESTED_INTERCEPTION_CHANCE -> {
+                log { "catch roll p=${(contest * CONTESTED_INTERCEPTION_CHANCE).fixed(2)} roll=${roll.fixed(2)} → INTERCEPTED" }
+                return interception(ball, defense.minByOrNull { it.currentPos.distance2DTo(ball) })
+            }
+
+            roll < contest * (CONTESTED_INTERCEPTION_CHANCE + CONTESTED_BREAKUP_CHANCE) -> {
+                log { "catch roll p=${(contest * (CONTESTED_INTERCEPTION_CHANCE + CONTESTED_BREAKUP_CHANCE)).fixed(2)} roll=${roll.fixed(2)} → BROKEN UP" }
+                return incomplete("Pass broken up!")
+            }
         }
         val catchChance = catchChance(receiver.attributes.catching)
-        if (random.nextFloat() >= catchChance) return incomplete("Dropped pass!")
+        val catchRoll = random.nextFloat()
+        log { "catch roll p=${catchChance.fixed(2)} roll=${catchRoll.fixed(2)} → ${if (catchRoll < catchChance) "CAUGHT" else "DROPPED"}" }
+        if (catchRoll >= catchChance) return incomplete("Dropped pass!")
 
         if (catchYardLine >= Rules.FIELD_LENGTH_YDS) {
             return touchdown(
@@ -991,9 +1035,12 @@ class PlaySimulator(
         isSack: Boolean = false,
     ): PlayOutcome? {
         val chance = baseChance * hitter.attributes.tackle / carrier.attributes.strength.coerceAtLeast(1)
-        if (random.nextFloat() >= chance) return null
+        val fumbleRoll = random.nextFloat()
+        log { "fumble roll p=${chance.fixed(3)} roll=${fumbleRoll.fixed(3)} → ${if (fumbleRoll < chance) "FUMBLE" else "SECURE"}" }
+        if (fumbleRoll >= chance) return null
 
         val recovery = resolveFumbleRecovery(carrier)
+        log { "recovery: ${recovery.recoverer?.let(::label) ?: "nobody near"} (${if (recovery.defenseRecovers) "defense" else "offense"})" }
         val withRecoverer = actors.copy(recovererId = recovery.recoverer?.id)
         return if (recovery.defenseRecovers) {
             PlayOutcome.Scrimmage(

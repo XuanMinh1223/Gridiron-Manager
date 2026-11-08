@@ -93,6 +93,13 @@ class GameStatsTracker(
 
     fun snapshot() = GameStats(stats.toMap())
 
+    /**
+     * What the last [record] call actually booked, as `; `-separated entries (`passAtt QB; sack WLB; tackle WLB`), or
+     * empty if it booked nothing. Names are formation slots. Diagnostic text only: it is built from what was recorded.
+     */
+    var lastRecordSummary: String = ""
+        private set
+
     /** [state] is the state before the play: it says whether this was an extra-point try. */
     fun record(
         state: GameState,
@@ -101,20 +108,31 @@ class GameStatsTracker(
     ) {
         // Snap ids carry the slot as a prefix; strip it by slot rather than guessing, since player ids contain '_' too
         val slotById = (snap.offense + snap.defense).associate { it.id to it.slot }
+        val entries = mutableListOf<String>()
 
+        fun note(
+            kind: String,
+            snapId: String?,
+            yards: Int? = null,
+        ) {
+            entries += listOfNotNull(kind, slotById[snapId] ?: snapId, yards?.let(::signedYards)).joinToString(" ")
+        }
+
+        /** Applies [change] to the player, returning whether there was a player to apply it to. */
         fun update(
             snapId: String?,
             change: (PlayerGameStats) -> PlayerGameStats,
-        ) {
-            if (snapId == null) return
+        ): Boolean {
+            if (snapId == null) return false
             val playerId = slotById[snapId]?.let { snapId.removePrefix("${it}_") } ?: snapId
-            val player = roster[playerId] ?: return
+            val player = roster[playerId] ?: return false
             val current = stats[playerId] ?: PlayerGameStats(player.teamId, player.id, player.fullName, player.position)
             stats[playerId] = change(current)
+            return true
         }
 
         when (outcome) {
-            is PlayOutcome.Scrimmage -> recordScrimmage(snap.playType, outcome.result, ::update)
+            is PlayOutcome.Scrimmage -> recordScrimmage(snap.playType, outcome.result, ::update, ::note)
             is PlayOutcome.FieldGoal -> {
                 val isExtraPoint = state.phase == GamePhase.EXTRA_POINT
                 update(outcome.result.kickerId) {
@@ -128,24 +146,28 @@ class GameStatsTracker(
 
             is PlayOutcome.Kick -> {
                 val kick = outcome.result
-                update(kick.returnerId) {
-                    it.copy(
-                        returnYards = it.returnYards + kick.returnYards,
-                        returnTouchdowns = it.returnTouchdowns + if (kick.outcomeType == KickOutcomeType.RETURN_TOUCHDOWN) 1 else 0,
-                    )
-                }
+                val returned =
+                    update(kick.returnerId) {
+                        it.copy(
+                            returnYards = it.returnYards + kick.returnYards,
+                            returnTouchdowns = it.returnTouchdowns + if (kick.outcomeType == KickOutcomeType.RETURN_TOUCHDOWN) 1 else 0,
+                        )
+                    }
+                if (returned) note("returnYds", kick.returnerId, kick.returnYards)
                 if (kick.outcomeType == KickOutcomeType.RETURN_FUMBLE_RECOVERED && kick.recoveredByKickingTeam) {
-                    update(kick.returnerId) { it.copy(fumblesLost = it.fumblesLost + 1) }
-                    update(kick.recovererId) { it.copy(fumblesRecovered = it.fumblesRecovered + 1) }
+                    if (update(kick.returnerId) { it.copy(fumblesLost = it.fumblesLost + 1) }) note("fumbleLost", kick.returnerId)
+                    if (update(kick.recovererId) { it.copy(fumblesRecovered = it.fumblesRecovered + 1) }) note("fumbleRec", kick.recovererId)
                 }
             }
         }
+        lastRecordSummary = entries.joinToString("; ")
     }
 
     private fun recordScrimmage(
         playType: PlayType,
         result: PlayResult,
-        update: (String?, (PlayerGameStats) -> PlayerGameStats) -> Unit,
+        update: (String?, (PlayerGameStats) -> PlayerGameStats) -> Boolean,
+        note: (String, String?, Int?) -> Unit,
     ) {
         val actors = result.actors
         val yards = result.yardsGained
@@ -153,28 +175,41 @@ class GameStatsTracker(
         when {
             result.isSack -> {
                 // No pass attempt and no sack yardage accounting: the lost yards are already in the field position
-                update(actors.tacklerId) { it.copy(sacks = it.sacks + 1) }
+                if (update(actors.tacklerId) { it.copy(sacks = it.sacks + 1) }) note("sack", actors.tacklerId, null)
             }
 
             result.isScramble || playType == PlayType.RUN || playType == PlayType.KNEEL -> {
-                update(actors.carrierId) {
-                    it.copy(
-                        rushAttempts = it.rushAttempts + 1,
-                        rushYards = it.rushYards + yards,
-                        rushTouchdowns = it.rushTouchdowns + if (result.isTouchdown) 1 else 0,
-                    )
+                val rushed =
+                    update(actors.carrierId) {
+                        it.copy(
+                            rushAttempts = it.rushAttempts + 1,
+                            rushYards = it.rushYards + yards,
+                            rushTouchdowns = it.rushTouchdowns + if (result.isTouchdown) 1 else 0,
+                        )
+                    }
+                if (rushed) {
+                    note("rushAtt", actors.carrierId, null)
+                    note("rushYds", actors.carrierId, yards)
                 }
             }
 
             playType == PlayType.PASS || playType == PlayType.SPIKE -> {
-                update(actors.passerId) {
-                    it.copy(
-                        passAttempts = it.passAttempts + 1,
-                        completions = it.completions + if (result.isPassComplete) 1 else 0,
-                        passYards = it.passYards + if (result.isPassComplete) yards else 0,
-                        passTouchdowns = it.passTouchdowns + if (result.isPassComplete && result.isTouchdown) 1 else 0,
-                        interceptionsThrown = it.interceptionsThrown + if (actors.interceptorId != null) 1 else 0,
-                    )
+                val threw =
+                    update(actors.passerId) {
+                        it.copy(
+                            passAttempts = it.passAttempts + 1,
+                            completions = it.completions + if (result.isPassComplete) 1 else 0,
+                            passYards = it.passYards + if (result.isPassComplete) yards else 0,
+                            passTouchdowns = it.passTouchdowns + if (result.isPassComplete && result.isTouchdown) 1 else 0,
+                            interceptionsThrown = it.interceptionsThrown + if (actors.interceptorId != null) 1 else 0,
+                        )
+                    }
+                if (threw) {
+                    note("passAtt", actors.passerId, null)
+                    if (result.isPassComplete) {
+                        note("completion", actors.receiverId, null)
+                        note("passYds", actors.passerId, yards)
+                    }
                 }
                 if (result.isPassComplete) {
                     update(actors.receiverId) {
@@ -190,16 +225,16 @@ class GameStatsTracker(
 
         // A tackle is a play that ends by being brought down: not a score, not a turnover. Sacks count as tackles.
         if ((result.isSack || (!result.isTouchdown && !result.isTurnover)) && actors.tacklerId != null) {
-            update(actors.tacklerId) { it.copy(tackles = it.tackles + 1) }
+            if (update(actors.tacklerId) { it.copy(tackles = it.tackles + 1) }) note("tackle", actors.tacklerId, null)
         }
 
         // Takeaways. A defensive score on a takeaway is credited only through the takeaway itself.
         if (result.isTurnover) {
             if (actors.interceptorId != null) {
-                update(actors.interceptorId) { it.copy(interceptions = it.interceptions + 1) }
+                if (update(actors.interceptorId) { it.copy(interceptions = it.interceptions + 1) }) note("INT", actors.interceptorId, null)
             } else {
-                update(actors.carrierId) { it.copy(fumblesLost = it.fumblesLost + 1) }
-                update(actors.recovererId) { it.copy(fumblesRecovered = it.fumblesRecovered + 1) }
+                if (update(actors.carrierId) { it.copy(fumblesLost = it.fumblesLost + 1) }) note("fumbleLost", actors.carrierId, null)
+                if (update(actors.recovererId) { it.copy(fumblesRecovered = it.fumblesRecovered + 1) }) note("fumbleRec", actors.recovererId, null)
             }
         }
     }

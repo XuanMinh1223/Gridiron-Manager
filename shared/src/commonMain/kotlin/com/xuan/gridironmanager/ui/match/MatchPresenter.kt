@@ -10,6 +10,7 @@ import com.xuan.gridironmanager.domain.sim.match.GamePhase
 import com.xuan.gridironmanager.domain.sim.match.GameState
 import com.xuan.gridironmanager.domain.sim.match.GameStats
 import com.xuan.gridironmanager.domain.sim.match.PlayOutcome
+import com.xuan.gridironmanager.domain.sim.match.UNKNOWN_SEED
 import com.xuan.gridironmanager.domain.sim.movement.RunningPlayer
 import com.xuan.gridironmanager.domain.sim.play.Snap
 import com.xuan.gridironmanager.domain.sim.playbook.DefensiveCall
@@ -37,6 +38,8 @@ class MatchPresenter(
     private val simDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val random: Random = Random.Default,
     private val userIsHome: Boolean = true,
+    /** The seed [random] was made from, shown in the debug log. Unknown unless the caller says. */
+    private val seed: Long = UNKNOWN_SEED,
 ) : MatchActions {
     private val _uiState = MutableStateFlow(MatchUiState())
     val uiState: StateFlow<MatchUiState> = _uiState.asStateFlow()
@@ -56,13 +59,15 @@ class MatchPresenter(
         initialState: GameState = GameState.openingKickoff(),
     ) {
         currentMatchup = matchup
-        simulator = MatchSimulator(matchup, random)
-        _uiState.update { it.copy(gameState = initialState, gameStats = GameStats(), isMatchReady = true) }
+        // A new game is a new simulator, so its debug log starts empty; the toggle is the user's and carries over
+        simulator = MatchSimulator(matchup, random, seed = seed).also { it.debugEnabled = _uiState.value.isDebugMode }
+        _uiState.update { it.copy(gameState = initialState, gameStats = GameStats(), debugLog = "", isMatchReady = true) }
         preparePlayCalls()
         showPreview()
     }
 
     override fun setDebugMode(enabled: Boolean) {
+        simulator?.debugEnabled = enabled
         _uiState.update { it.copy(isDebugMode = enabled) }
     }
 
@@ -133,9 +138,10 @@ class MatchPresenter(
                 }
             } while (outcome == null)
 
-            val nextState = simulator.resolve(state, outcome, play.elapsedSec)
+            // Record before resolving: resolve files the debug log block, which reports this play's recorded stats
             simulator.recordPlay(state, snap, outcome)
             simulator.playCaller.recordPlay(state, offensivePlay, defensiveCall)
+            val nextState = simulator.resolve(state, outcome, play.elapsedSec)
             val summary =
                 if (state.phase == GamePhase.KICKOFF) outcome.description
                 else "${outcome.description} (${offensivePlay.name} vs ${defensiveCall.name})"
@@ -143,6 +149,7 @@ class MatchPresenter(
                 it.copy(
                     gameState = nextState,
                     gameStats = simulator.gameStats,
+                    debugLog = simulator.debugLogText,
                     isPlayRunning = false,
                     playByPlayText = if (nextState.isGameOver) "$summary That's the final whistle!" else summary,
                     ballPosition = null,
@@ -175,6 +182,7 @@ class MatchPresenter(
                 it.copy(
                     gameState = finalState,
                     gameStats = simulator.gameStats,
+                    debugLog = simulator.debugLogText,
                     isPlayRunning = false,
                     players = emptyList(),
                     lineOfScrimmageY = null,

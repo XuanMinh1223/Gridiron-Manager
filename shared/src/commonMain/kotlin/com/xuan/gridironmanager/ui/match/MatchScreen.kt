@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -23,8 +24,17 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -40,6 +50,7 @@ import com.xuan.gridironmanager.ui.match.components.FieldCanvas
 import com.xuan.gridironmanager.ui.match.components.PlayCallPanel
 import com.xuan.gridironmanager.ui.match.components.SimControls
 import com.xuan.gridironmanager.ui.match.components.teamPalette
+import kotlinx.coroutines.delay
 
 @Composable
 fun MatchScreen(
@@ -156,6 +167,52 @@ private fun BoxScoreSection(
     lines.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
 }
 
+private const val COPY_CONFIRMATION_MILLIS = 2_000L
+
+/**
+ * The game's debug log in a scrolling monospace panel (latest play at the bottom) with a button that copies all of it.
+ * Display only: it reports what the sim recorded and never drives anything.
+ */
+@Suppress("DEPRECATION") // See the note on the clipboard below
+@Composable
+private fun DebugLogPanel(log: String) {
+    // LocalClipboardManager is deprecated in favour of LocalClipboard, but in Compose Multiplatform 1.11.1 common code has
+    // no way to build the ClipEntry that API needs (it is an expect class with platform-only constructors). The deprecated
+    // manager is the only clipboard reachable from commonMain, so it stays until a common ClipEntry exists.
+    val clipboard = LocalClipboardManager.current
+    val scrollState = rememberScrollState()
+    var copied by remember { mutableStateOf(false) }
+
+    // Stay on the newest play: follow the panel's height as each block is appended
+    LaunchedEffect(log) { snapshotFlow { scrollState.maxValue }.collect { scrollState.scrollTo(it) } }
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(COPY_CONFIRMATION_MILLIS)
+            copied = false
+        }
+    }
+
+    OutlinedButton(
+        onClick = {
+            clipboard.setText(AnnotatedString(log))
+            copied = true
+        },
+        enabled = log.isNotEmpty(),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(if (copied) "Copied ✓" else "Copy debug log")
+    }
+    Spacer(modifier = Modifier.height(8.dp))
+    Card(modifier = Modifier.fillMaxWidth().heightIn(max = 260.dp)) {
+        Text(
+            text = log.ifEmpty { "Play a down to start the log." },
+            fontFamily = FontFamily.Monospace,
+            fontSize = 10.sp,
+            modifier = Modifier.verticalScroll(scrollState).padding(8.dp),
+        )
+    }
+}
+
 @Composable
 private fun MatchSidebar(
     uiState: MatchUiState,
@@ -269,6 +326,8 @@ private fun MatchSidebar(
                     ) {
                         Text("Reset Game (Debug)")
                     }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    DebugLogPanel(uiState.debugLog)
                     Spacer(modifier = Modifier.height(8.dp))
                 }
 

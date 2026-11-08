@@ -22,4 +22,6 @@ data class PlayResult(
     val isPassComplete: Boolean = false,
     /** The QB kept it and ran: a rushing attempt, not a pass attempt. */
     val isScramble: Boolean = false,
+    /** The play's decision trace, one line per event. Empty unless debugging is on. Diagnostic only: nothing reads it back. */
+    val debugTrace: List<String> = emptyList(),
 )

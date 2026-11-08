@@ -33,6 +33,9 @@ class BlockingModel(
     private val blocks: List<Block>
     private val blocksByDefenderId: Map<String, Block>
 
+    /** Diagnostic hook: told (defender, blocker) when a defender sheds a block. Never influences the blocking itself. */
+    var onShed: ((RunningPlayer, RunningPlayer) -> Unit)? = null
+
     init {
         val available = offense.filter { it.role == PlayerRole.BLOCKER }.toMutableList()
         val rushers = defense.filter { it.role == PlayerRole.PASS_RUSHER || it.role == PlayerRole.BLITZER }
@@ -99,6 +102,7 @@ class BlockingModel(
             if (block.progress >= 1f) {
                 block.isShed = true
                 blocker.blockingId = null
+                onShed?.invoke(defender, blocker)
                 continue
             }
 

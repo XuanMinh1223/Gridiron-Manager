@@ -23,7 +23,10 @@ data class MatchUiState(
     val playCall: PlayCallState = PlayCallState(),
     val simSpeed: SimSpeed = SimSpeed.X1,
     val showAssignments: Boolean = true,
+    /** Session-only debug toggle (off by default): turns on per-play logging and shows the log panel. */
     val isDebugMode: Boolean = false,
+    /** The whole game's debug log, one block per play. Empty unless debugging has been on. Display only. */
+    val debugLog: String = "",
     val overlay: TacticalOverlay = TacticalOverlay.NONE,
     /** Direction of the currently previewed/live offense in world coordinates. */
     val isAttackingUp: Boolean = true,
