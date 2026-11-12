@@ -71,6 +71,18 @@ class BlockingModelTest {
     }
 
     @Test
+    fun testRusherBeyondContactRangeMustCloseBeforeBeingBlocked() {
+        val guard = blocker("G", 26f)
+        val tackle = rusher("DT", 26f, y = 52f)
+        val model = BlockingModel(listOf(guard), listOf(tackle), PlayType.PASS, Random(1))
+
+        assertFalse(model.isBlocked(tackle))
+        assertNull(guard.blockingId)
+        model.tick(tick) { quarterback }
+        assertFalse(model.isBlocked(tackle))
+    }
+
+    @Test
     fun testBetterRusherWinsSooner() {
         fun shedTime(rating: Int): Float {
             val tackle = rusher("DT", 26.5f, rating = rating)

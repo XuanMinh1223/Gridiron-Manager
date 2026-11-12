@@ -261,7 +261,7 @@ class DriveEngineTest {
     fun testKickoffTouchback() {
         val nextState = engine.resolve(GameState.openingKickoff(), touchback())
 
-        assertEquals(25, nextState.yardLine)
+        assertEquals(35, nextState.yardLine)
         assertFalse(nextState.isHomePossession)
         assertEquals(1, nextState.down)
     }
@@ -276,8 +276,76 @@ class DriveEngineTest {
     }
 
     @Test
+    fun testKickReturnTouchdownScoresForReceivingTeam() {
+        val touchdown =
+            PlayOutcome.Kick(
+                KickResult(
+                    endYardLine = 100,
+                    description = "Touchdown",
+                    isTouchback = false,
+                    isOutOfBounds = false,
+                    outcomeType = KickOutcomeType.RETURN_TOUCHDOWN,
+                ),
+            )
+
+        val nextState = engine.resolve(GameState.openingKickoff(), touchdown)
+
+        assertEquals(Rules.TOUCHDOWN_POINTS, nextState.awayScore)
+        assertFalse(nextState.isHomePossession)
+        assertEquals(GamePhase.EXTRA_POINT, nextState.phase)
+    }
+
+    @Test
     fun testOutcomeThatCannotHappenInPhaseIsRejected() {
         assertFailsWith<IllegalArgumentException> { engine.resolve(GameState.openingKickoff(), play(5)) }
         assertFailsWith<IllegalArgumentException> { engine.resolve(extraPointTry(), touchback()) }
+    }
+
+    @Test
+    fun testKickoffLandingZoneTouchbackAndShortKick() {
+        val kickoff = GameState.openingKickoff()
+        val landingZoneTouchback = touchback().copy(result = touchback().result.copy(outcomeType = KickOutcomeType.LANDING_ZONE_TOUCHBACK))
+        assertEquals(20, engine.resolve(kickoff, landingZoneTouchback).yardLine)
+        val shortKick = PlayOutcome.Kick(KickResult(28, "Short kick", false, false, outcomeType = KickOutcomeType.SHORT_KICK))
+        assertEquals(40, engine.resolve(kickoff, shortKick).yardLine)
+    }
+
+    @Test
+    fun testSafetyFreeKickUsesOwnEnforcementAndResetsFlag() {
+        val afterSafety = engine.resolve(GameState(yardLine = 2), play(-4))
+        assertTrue(afterSafety.isSafetyFreeKick)
+        val shortKick = PlayOutcome.Kick(KickResult(45, "Short kick", false, false, outcomeType = KickOutcomeType.SHORT_KICK))
+        val next = engine.resolve(afterSafety, shortKick)
+        assertEquals(50, next.yardLine)
+        assertFalse(next.isSafetyFreeKick)
+        assertFalse(next.isHomePossession)
+    }
+
+    @Test
+    fun testPuntFairCatchDownedAndKickingTeamRecovery() {
+        val punt = GameState(yardLine = 40, down = 4)
+        for (type in listOf(KickOutcomeType.FAIR_CATCH, KickOutcomeType.DOWNED)) {
+            val next = engine.resolve(punt, PlayOutcome.Kick(KickResult(12, type.name, false, false, outcomeType = type)))
+            assertFalse(next.isHomePossession)
+            assertEquals(12, next.yardLine)
+            assertEquals(1, next.down)
+        }
+        for (type in listOf(KickOutcomeType.MUFF_RECOVERED, KickOutcomeType.RETURN_FUMBLE_RECOVERED, KickOutcomeType.BLOCKED_RECOVERED)) {
+            val result = KickResult(60, type.name, false, false, outcomeType = type, recoveredByKickingTeam = true)
+            val next = engine.resolve(punt, PlayOutcome.Kick(result))
+            assertTrue(next.isHomePossession)
+            assertEquals(40, next.yardLine)
+            assertEquals(1, next.down)
+            assertEquals(GamePhase.SCRIMMAGE, next.phase)
+        }
+    }
+
+    @Test
+    fun testKickingTeamEndZoneRecoveryScoresAndOwnsTry() {
+        val recovery = PlayOutcome.Kick(KickResult(0, "Recovered", false, false, outcomeType = KickOutcomeType.MUFF_RECOVERED, recoveredByKickingTeam = true))
+        val next = engine.resolve(GameState(yardLine = 50, down = 4), recovery)
+        assertEquals(6, next.homeScore)
+        assertTrue(next.isHomePossession)
+        assertEquals(GamePhase.EXTRA_POINT, next.phase)
     }
 }

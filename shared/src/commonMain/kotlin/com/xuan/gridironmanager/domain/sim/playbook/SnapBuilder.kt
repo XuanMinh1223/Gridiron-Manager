@@ -13,6 +13,8 @@ import com.xuan.gridironmanager.domain.sim.match.GameState
 import com.xuan.gridironmanager.domain.sim.match.Rules
 import com.xuan.gridironmanager.domain.sim.movement.PlayerRole
 import com.xuan.gridironmanager.domain.sim.movement.RunningPlayer
+import com.xuan.gridironmanager.domain.sim.play.RotationAssignment
+import com.xuan.gridironmanager.domain.sim.play.RotationPlan
 import com.xuan.gridironmanager.domain.sim.play.Snap
 import com.xuan.gridironmanager.domain.sim.toRunningPlayer
 import kotlin.math.abs
@@ -48,16 +50,37 @@ object SnapBuilder {
         val unit = Playbook.defensiveUnitFor(offensivePlay.type, defensiveCall)
         val defenseAnchorWorldY =
             if (unit.formation.type == FormationType.KICK_RETURN) FieldGeometry.toWorldY(KICK_RETURN_ANCHOR_YARD_LINE, isAttackingUp) else losWorldY
-        val defense = buildDefense(defenseRoster, unit, defenseAnchorWorldY, isAttackingUp, offense)
+        // Kicking plays swap in a special teams unit, which never carries a disguise. For a disguised scrimmage call
+        // the lineup is the shell; the true assignments ride along as a rotation plan applied after the snap.
+        val disguise = unit.disguise
+        val defense = buildDefense(defenseRoster, unit.shell(), defenseAnchorWorldY, isAttackingUp, offense)
+        val rotation =
+            disguise?.let {
+                val trueDefense = buildDefense(defenseRoster, unit, defenseAnchorWorldY, isAttackingUp, offense)
+                RotationPlan(
+                    rotationSec = it.rotationSec,
+                    assignments =
+                        trueDefense
+                            .filter { player -> player.slot != null }
+                            .associate { player ->
+                                val slot = player.slot!!
+                                slot to RotationAssignment(slot, player.role, player.coverageTargetId, player.zoneLandmark)
+                            },
+                )
+            }
+        val specialTeamsDefense =
+            if (offensivePlay.type == PlayType.PUNT) defense.map { if (it.slot in setOf("LDE", "LDT", "RDT", "RDE")) it.copy(role = PlayerRole.PASS_RUSHER) else it }
+            else defense
 
         val offenseBySlot = offense.associateBy { it.slot }
         return Snap(
             offense = offense,
-            defense = defense,
+            defense = specialTeamsDefense,
             playType = offensivePlay.type,
             losYardLine = losYardLine,
             isAttackingUp = isAttackingUp,
             progression = offensivePlay.progression.mapNotNull { offenseBySlot[it]?.id },
+            rotation = rotation,
         )
     }
 
@@ -78,12 +101,13 @@ object SnapBuilder {
                     }
 
                     play.type == PlayType.KICKOFF || play.type == PlayType.PUNT -> {
-                        // Coverage team sprints downfield
-                        Route("Coverage", listOf(Waypoint(start.x, start.y + KICK_COVERAGE_SPRINT_YDS * direction)))
+                        // Kick movement is controlled by PlaySimulator. Receiving players remain
+                        // anchored until the ball is fielded; coverage routes begin after contact.
+                        null
                     }
 
                     else -> {
-                        play.routes[node.slot]?.let { toWorldRoute(it, node, start, direction, extendToEndZone = role == PlayerRole.BALL_CARRIER) }
+                        play.routes[node.slot]?.let { toWorldRoute(it, node, start, direction, extendToEndZone = role == PlayerRole.BALL_CARRIER && play.type == PlayType.RUN) }
                     }
                 }
             player.toRunningPlayer(route).copy(
@@ -126,6 +150,12 @@ object SnapBuilder {
                     else -> PlayerRole.BLOCKER
                 }
             }
+
+            // The QB takes the snap and kneels; everyone else just holds their block
+            PlayType.KNEEL -> if (node.slot == play.ballCarrierSlot) PlayerRole.BALL_CARRIER else PlayerRole.BLOCKER
+
+            // No routes on a spike: receivers do not run anywhere
+            PlayType.SPIKE -> if (node.position == Position.QB) PlayerRole.PASSER else PlayerRole.BLOCKER
         }
 
     private fun buildDefense(
@@ -153,13 +183,7 @@ object SnapBuilder {
                         else -> PlayerRole.MAN_COVERAGE
                     }
                 val route =
-                    if (formationType == FormationType.PUNT_RETURN) {
-                        // Front line rushes the punter, everyone else drops back to block for the returner
-                        val move = if (node.yOffset < 3f) -10f else 5f
-                        Route("Return", listOf(Waypoint(start.x, start.y + move * direction)))
-                    } else {
-                        null
-                    }
+                    null
                 player.toRunningPlayer(route).copy(
                     id = "${node.slot}_${player.id}",
                     currentPos = start,

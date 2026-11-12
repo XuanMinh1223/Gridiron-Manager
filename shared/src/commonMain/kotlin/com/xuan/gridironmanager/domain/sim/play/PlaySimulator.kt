@@ -5,10 +5,17 @@ import com.xuan.gridironmanager.domain.model.Vector3D
 import com.xuan.gridironmanager.domain.sim.AttributeTranslator
 import com.xuan.gridironmanager.domain.sim.BallTrajectory
 import com.xuan.gridironmanager.domain.sim.FieldGeometry
+import com.xuan.gridironmanager.domain.sim.ai.CoverageRead
 import com.xuan.gridironmanager.domain.sim.ai.QbBrain
 import com.xuan.gridironmanager.domain.sim.ai.QbState
 import com.xuan.gridironmanager.domain.sim.match.FieldGoalResult
 import com.xuan.gridironmanager.domain.sim.match.KickResult
+import com.xuan.gridironmanager.domain.sim.match.KickOutcomeType
+import com.xuan.gridironmanager.domain.sim.match.PlayActors
+import com.xuan.gridironmanager.domain.sim.match.PlayDebugTrace
+import com.xuan.gridironmanager.domain.sim.match.at
+import com.xuan.gridironmanager.domain.sim.match.fixed
+import com.xuan.gridironmanager.domain.sim.match.formatYardLine
 import com.xuan.gridironmanager.domain.sim.match.PlayOutcome
 import com.xuan.gridironmanager.domain.sim.match.PlayResult
 import com.xuan.gridironmanager.domain.sim.match.Rules
@@ -31,6 +38,10 @@ import kotlin.random.Random
 class PlaySimulator(
     private val snap: Snap,
     private val random: Random = Random.Default,
+    /** A pre-snap coverage read already rolled for this play (the human QB's, shown as a hint); null to roll here. */
+    qbIdentifiedOverride: Boolean? = null,
+    /** Diagnostic trace for this play, or null (the default) when debugging is off. Appended to, never read back. */
+    private val trace: PlayDebugTrace? = null,
 ) {
     private val offense = snap.offense
     private val defense = snap.defense
@@ -49,20 +60,62 @@ class PlaySimulator(
     private val playersById = players.associateBy { it.id }
     private val gazeById = players.associate { it.id to initialGaze(it) }.toMutableMap()
 
-    private val passer = if (playType == PlayType.PASS) offense.find { it.role == PlayerRole.PASSER } else null
-    private val qbBrain = passer?.let { QbBrain(it, snap.progression.mapNotNull { id -> playersById[id] }) }
+    private val passer = if (playType == PlayType.PASS || playType == PlayType.SPIKE) offense.find { it.role == PlayerRole.PASSER } else null
+
+    /** One seeded roll per disguised pass play: did the QB see through the shell? Always true without a disguise. */
+    private val qbIdentified: Boolean =
+        if (playType == PlayType.PASS && passer != null && snap.rotation != null) qbIdentifiedOverride ?: CoverageRead.roll(passer.attributes, random) else true
+
+    /** Whether the QB was fooled by this play's coverage disguise. */
+    val qbWasFooled: Boolean get() = !qbIdentified
+
+    // A spike never reads a progression, so only a real pass play gets a brain
+    private val qbBrain =
+        passer?.takeIf { playType == PlayType.PASS }?.let {
+            QbBrain(
+                qb = it,
+                progressions = snap.progression.mapNotNull { id -> playersById[id] },
+                readDelaySec = if (qbIdentified) 0f else CoverageRead.FOOLED_READ_DELAY_SEC,
+                recoverAtSec = (snap.rotation?.rotationSec ?: 0f) + recognitionDelaySec(it.attributes.awareness.coerceIn(0, 100)),
+                trace = trace,
+            )
+        }
+
+    /** True while a fooled QB is still reading the shell rather than the rotated coverage. */
+    val isQbFooled: Boolean get() = qbBrain?.isFooled == true
+
+    private var hasRotated = false
 
     /** The runner on run plays, or the receiver after a catch. */
-    private var ballCarrier = if (playType == PlayType.RUN) offense.find { it.role == PlayerRole.BALL_CARRIER } else null
+    private var ballCarrier = if (playType == PlayType.RUN || playType == PlayType.KNEEL) offense.find { it.role == PlayerRole.BALL_CARRIER } else null
     private val kicker = offense.find { it.role == PlayerRole.KICKER }
+    private val holder = if (playType == PlayType.FIELD_GOAL) offense.find { it.slot == "H" } else null
+    private var intendedKickTarget: Vector3D? = null
 
-    private val blocking = BlockingModel(offense, defense, playType, random)
+    private val blocking =
+        BlockingModel(offense, defense, playType, random).also { model ->
+            if (trace != null) model.onShed = { defender, blocker -> trace.at(elapsedSec, "${label(defender)} sheds ${label(blocker)}") }
+        }
+
+    private fun label(player: RunningPlayer) = player.slot ?: player.id
+
+    private inline fun log(text: () -> String) {
+        trace?.at(elapsedSec, text())
+    }
 
     private var ballTrajectory: BallTrajectory? = null
     private var throwTimeSec = 0f
     private var targetReceiver: RunningPlayer? = null
     private var fieldGoalResult: FieldGoalResult? = null
+    private var kickPhase = KickPhase.OPERATION
+    private var kickContactSec = 0f
+    private var kickLandingYardLine = 0
+    private var kickReturner: RunningPlayer? = null
+    private val endZoneBreakByReceiver = mutableMapOf<String, Float>()
+    private val kickoffBlockerStartY = if (playType == PlayType.KICKOFF) defense.associate { it.id to it.currentPos.y } else emptyMap()
     private var carrierVelocity = Vector3D(0f, 0f, 0f)
+    private var scrambleDecided = false
+    private var isScramble = false
     private val defenderTracking = mutableMapOf<String, DefenderTrackingState>()
 
     // Elusiveness: tacklers who missed and are still recovering, and the moves that beat them
@@ -74,18 +127,43 @@ class PlaySimulator(
         if (playType == PlayType.KICKOFF || playType == PlayType.PUNT) {
             val kicker = kicker ?: offense.first()
             val kickDistance = AttributeTranslator.calculateKickDistanceYards(kicker.attributes.kickPower)
+            intendedKickTarget = kicker.currentPos.copy(y = kicker.currentPos.y + kickDistance * direction, z = 0f)
+            val placementError = AttributeTranslator.calculateKickPlacementError(kicker.attributes.kickAccuracy, kickDistance)
+            val errorAngle = random.nextFloat() * 2f * PI.toFloat()
+            val errorMagnitude = placementError * sqrt(random.nextFloat())
+            val actualTarget =
+                intendedKickTarget!!.copy(
+                    x = intendedKickTarget!!.x + cos(errorAngle) * errorMagnitude,
+                    y = intendedKickTarget!!.y + sin(errorAngle) * errorMagnitude,
+                )
             ballTrajectory =
                 BallTrajectory(
                     startPos = kicker.currentPos,
-                    targetPos = kicker.currentPos.copy(y = kicker.currentPos.y + kickDistance * direction, z = 0f),
+                    targetPos = actualTarget,
                     totalFlightTimeSec = AttributeTranslator.calculateHangtimeSec(kicker.attributes.kickPower),
                     apexHeightYards = KICK_APEX_YDS,
                 )
         }
     }
 
-    fun tick(tickDeltaSec: Float): PlayOutcome? {
+    fun tick(tickDeltaSec: Float): PlayOutcome? = advance(tickDeltaSec)?.let(::withTrace)
+
+    /** Hands the finished play's trace to the outcome. A no-op when debugging is off (there is no trace). */
+    private fun withTrace(outcome: PlayOutcome): PlayOutcome {
+        val trace = trace ?: return outcome
+        if (outcome is PlayOutcome.Kick) {
+            val kick = outcome.result
+            trace.at(elapsedSec, "kick: ${kick.outcomeType} landing ${formatYardLine(kick.landingYardLine)} return ${kick.returnYards} yd")
+        }
+        return if (outcome is PlayOutcome.Scrimmage) PlayOutcome.Scrimmage(outcome.result.copy(debugTrace = trace.lines())) else outcome
+    }
+
+    private fun advance(tickDeltaSec: Float): PlayOutcome? {
         elapsedSec += tickDeltaSec
+
+        if (playType == PlayType.KICKOFF || playType == PlayType.PUNT) {
+            return tickSpecialTeams(tickDeltaSec)
+        }
 
         val carrierStart = ballCarrier?.currentPos
         moveOffense(tickDeltaSec)
@@ -95,29 +173,146 @@ class PlaySimulator(
                 carrierVelocity = Vector3D((carrier.currentPos.x - start.x) / tickDeltaSec, (carrier.currentPos.y - start.y) / tickDeltaSec, 0f)
             }
         }
+        snap.rotation?.let { if (!hasRotated && elapsedSec >= it.rotationSec) applyRotation(it) }
         moveDefense(tickDeltaSec)
         updateGazes(tickDeltaSec)
 
         val outcome =
             when (playType) {
-                PlayType.KICKOFF, PlayType.PUNT -> tickKick()
-                PlayType.FIELD_GOAL -> tickFieldGoal()
+                PlayType.FIELD_GOAL -> tickFieldGoal(tickDeltaSec)
                 PlayType.RUN -> tickRun()
                 PlayType.PASS -> tickPass(tickDeltaSec)
+                PlayType.KNEEL -> tickKneel()
+                PlayType.SPIKE -> tickSpike()
             }
 
         return outcome ?: if (elapsedSec >= MAX_PLAY_DURATION_SEC) whistleDead() else null
     }
 
+    private fun tickSpecialTeams(tickDeltaSec: Float): PlayOutcome? {
+        val kicker = kicker ?: return whistleDead()
+        when (kickPhase) {
+            KickPhase.OPERATION -> {
+                // The operation is intentionally short but non-zero: the ball is not in flight
+                // until the kicker completes the approach and contacts it.
+                if (elapsedSec < KICK_OPERATION_SEC) {
+                    moveKickerToContact(kicker, tickDeltaSec)
+                    if (playType == PlayType.PUNT) movePuntRush(tickDeltaSec)
+                    return null
+                }
+                if (playType == PlayType.PUNT && defense.any { it.role == PlayerRole.PASS_RUSHER && it.currentPos.distance2DTo(kicker.currentPos) <= PUNT_BLOCK_RADIUS_YDS }) {
+                    val spot = receivingYardLine(kicker.currentPos)
+                val recoverer = (defense + offense).filter { it !== kicker }.minByOrNull { it.currentPos.distance2DTo(kicker.currentPos) }
+                    return kickOutcome(spot, "Punt BLOCKED and recovered!", false, false, spot, spot, KickOutcomeType.BLOCKED_RECOVERED, recoverer?.isOffense == true, recoverer)
+                }
+                kickContactSec = elapsedSec
+                kickPhase = KickPhase.FLIGHT
+            }
+
+            KickPhase.FLIGHT -> {
+                if (playType == PlayType.PUNT) {
+                    moveCoverage(kicker, tickDeltaSec)
+                    movePuntReturnUnit(tickDeltaSec)
+                } else {
+                    moveKickoffReturner(tickDeltaSec)
+                }
+                val trajectory = ballTrajectory ?: return null
+                if (elapsedSec - kickContactSec < trajectory.totalFlightTimeSec) {
+                    ballPosition = trajectory.getPositionAt(elapsedSec - kickContactSec)
+                    return null
+                }
+                return fieldKick() ?: run {
+                    kickPhase = KickPhase.RETURN
+                    null
+                }
+            }
+
+            KickPhase.RETURN -> {
+                return tickKickReturn(tickDeltaSec)
+            }
+        }
+        return null
+    }
+
+    private fun moveKickerToContact(kicker: RunningPlayer, tickDeltaSec: Float) {
+        val target = kicker.currentPos.copy(y = kicker.currentPos.y + direction * KICK_APPROACH_YDS)
+        MovementEngine.pursue(kicker, target, tickDeltaSec)
+    }
+
+    private fun movePuntRush(tickDeltaSec: Float) {
+        val punter = kicker ?: return
+        defense.filter { it.role == PlayerRole.PASS_RUSHER }.forEach { MovementEngine.pursue(it, punter.currentPos, tickDeltaSec) }
+    }
+
+    private fun moveCoverage(kicker: RunningPlayer, tickDeltaSec: Float) {
+        val direction = if (snap.isAttackingUp) 1f else -1f
+        val players = offense.filter { it !== kicker }
+        players.forEach { player ->
+            val target = player.currentPos.copy(y = player.currentPos.y + KICK_COVERAGE_SPRINT_YDS * direction)
+            MovementEngine.pursue(player, target, tickDeltaSec)
+        }
+    }
+
+    private fun movePuntReturnUnit(tickDeltaSec: Float) {
+        val returner = defense.find { it.slot == "PR" } ?: return
+        val landing = ballTrajectory?.targetPos ?: return
+        val legalLanding = landing.copy(
+            x = landing.x.coerceIn(0f, FieldGeometry.WIDTH_YDS),
+            y = FieldGeometry.clampInsideEndLines(landing.y),
+            z = 0f,
+        )
+        MovementEngine.pursue(returner, legalLanding, tickDeltaSec)
+
+        // The outside vices contain gunners while the front line and safeties drop into return lanes.
+        for (blocker in defense.filter { it !== returner }) {
+            val gunner = when (blocker.slot) {
+                "VL" -> offense.find { it.slot == "GL" }
+                "VR" -> offense.find { it.slot == "GR" }
+                else -> null
+            }
+            val target = gunner?.currentPos ?: legalLanding.copy(x = blocker.currentPos.x, y = legalLanding.y - direction * PUNT_RETURN_LANE_DEPTH_YDS)
+            MovementEngine.pursue(blocker, target, tickDeltaSec)
+        }
+    }
+
+    private fun moveKickoffReturner(tickDeltaSec: Float) {
+        val returner = defense.find { it.slot == "KR" } ?: return
+        val landing = ballTrajectory?.targetPos ?: return
+        if (landing.x !in 0f..FieldGeometry.WIDTH_YDS) return
+        MovementEngine.pursue(
+            returner,
+            landing.copy(y = FieldGeometry.clampInsideEndLines(landing.y), z = 0f),
+            tickDeltaSec,
+        )
+    }
+
     private fun moveOffense(tickDeltaSec: Float) {
         val runAfterCatch = ballCarrier?.takeIf { playType == PlayType.PASS }
         if (runAfterCatch == null) {
-            MovementEngine.updatePositions(offense, tickDeltaSec)
+            movePassReceivers(tickDeltaSec)
             return
         }
-        MovementEngine.updatePositions(offense.filter { it !== runAfterCatch }, tickDeltaSec)
+        movePassReceivers(tickDeltaSec, runAfterCatch)
         // Turn upfield and head for the end zone
         MovementEngine.pursue(runAfterCatch, runAfterCatch.currentPos.copy(y = runAfterCatch.currentPos.y + DOWNFIELD_TARGET_YDS * direction), tickDeltaSec)
+    }
+
+    private fun movePassReceivers(tickDeltaSec: Float, carrier: RunningPlayer? = null) {
+        if (playType != PlayType.PASS) {
+            MovementEngine.updatePositions(offense.filter { it !== carrier }, tickDeltaSec)
+            return
+        }
+        val backLineY = if (snap.isAttackingUp) Rules.FIELD_LENGTH_YDS + Rules.END_ZONE_DEPTH_YDS - END_ZONE_BACKLINE_MARGIN_YDS else -Rules.END_ZONE_DEPTH_YDS + END_ZONE_BACKLINE_MARGIN_YDS
+        MovementEngine.updatePositions(offense.filter { it !== carrier && it.role != PlayerRole.RECEIVER }, tickDeltaSec)
+        for (receiver in offense.filter { it.role == PlayerRole.RECEIVER && it !== carrier }) {
+            val breakDirection = endZoneBreakByReceiver[receiver.id]
+            if (breakDirection == null) MovementEngine.updatePositions(listOf(receiver), tickDeltaSec)
+            if (breakDirection == null && (receiver.currentPos.y - backLineY) * direction < 0f) continue
+            val lateralDirection = breakDirection ?: if (receiver.currentPos.x <= FieldGeometry.CENTER_X) 1f else -1f
+            endZoneBreakByReceiver[receiver.id] = lateralDirection
+            receiver.currentPos = receiver.currentPos.copy(y = backLineY)
+            if (breakDirection != null) MovementEngine.pursue(receiver, receiver.currentPos.copy(x = FieldGeometry.CENTER_X + lateralDirection * END_ZONE_CROSS_TARGET_YDS), tickDeltaSec)
+        }
     }
 
     private fun moveDefense(tickDeltaSec: Float) {
@@ -204,52 +399,161 @@ class PlaySimulator(
         return threat?.currentPos?.let { it.copy(y = it.y + COVERAGE_CUSHION_YDS * direction) } ?: landmark
     }
 
-    private fun tickKick(): PlayOutcome? {
+    private fun fieldKick(): PlayOutcome? {
         val trajectory = ballTrajectory ?: return null
-        val ball = trajectory.getPositionAt(elapsedSec)
+        val ball = trajectory.targetPos
         ballPosition = ball
-        if (elapsedSec < trajectory.totalFlightTimeSec) return null
 
-        // Yard line from the kicking team's perspective (0-100)
         val kickingYardLine = if (snap.isAttackingUp) ball.y else Rules.FIELD_LENGTH_YDS - ball.y
-        // Yard line for the receiving team (distance from their own goal)
-        val receivingYardLine = (Rules.FIELD_LENGTH_YDS - kickingYardLine).toInt()
+        kickLandingYardLine = (Rules.FIELD_LENGTH_YDS - kickingYardLine).toInt().coerceIn(0, Rules.FIELD_LENGTH_YDS)
+        val intendedLandingYardLine = receivingYardLine(intendedKickTarget ?: trajectory.targetPos)
 
-        val result =
-            when {
-                kickingYardLine >= Rules.FIELD_LENGTH_YDS -> {
-                    KickResult(endYardLine = 0, description = "Touchback.", isTouchback = true, isOutOfBounds = false)
-                }
+        if (playType == PlayType.KICKOFF && kickLandingYardLine > Rules.KICKOFF_LANDING_ZONE_FRONT_YARD_LINE) {
+            return kickOutcome(kickLandingYardLine, "Kick short of the landing zone.", false, false, intendedLandingYardLine, kickLandingYardLine, KickOutcomeType.SHORT_KICK)
+        }
+        if (kickingYardLine >= Rules.FIELD_LENGTH_YDS) {
+            return kickOutcome(0, "Touchback.", true, false, intendedLandingYardLine, 0, KickOutcomeType.TOUCHBACK)
+        }
+        if (ball.x !in 0f..FieldGeometry.WIDTH_YDS) {
+            return kickOutcome(kickLandingYardLine, "Kick out of bounds.", false, true, intendedLandingYardLine, kickLandingYardLine, KickOutcomeType.KICK_OUT_OF_BOUNDS)
+        }
 
-                ball.x < 0 || ball.x > FieldGeometry.WIDTH_YDS -> {
-                    KickResult(
-                        endYardLine = if (playType == PlayType.KICKOFF) Rules.KICKOFF_OUT_OF_BOUNDS_YARD_LINE else receivingYardLine,
-                        description = "Kick out of bounds.",
-                        isTouchback = false,
-                        isOutOfBounds = true,
-                    )
-                }
-
-                else -> {
-                    // Caught/landed in bounds -> resolve immediately with a flat return for prototype stability
-                    val endYardLine = (receivingYardLine + SIMPLIFIED_RETURN_YDS).coerceAtMost(Rules.FIELD_LENGTH_YDS - 1)
-                    KickResult(
-                        endYardLine = endYardLine,
-                        description = "Kick caught and returned to the $endYardLine.",
-                        isTouchback = false,
-                        isOutOfBounds = false,
-                    )
-                }
+        val returner = defense.find { it.slot == if (playType == PlayType.PUNT) "PR" else "KR" } ?: defense.minByOrNull { it.currentPos.distance2DTo(ball) }
+        val canField = returner != null && returner.currentPos.distance2DTo(ball) <= KICK_FIELDING_RADIUS_YDS
+        if (!canField) {
+            if (playType == PlayType.PUNT) {
+                val bounce = random.nextInt(-PUNT_BOUNCE_YDS, PUNT_BOUNCE_YDS + 1)
+                val spot = kickLandingYardLine + bounce
+                if (spot <= 0) return kickOutcome(0, "Punt bounces into the end zone. Touchback.", true, false, intendedLandingYardLine, kickLandingYardLine, KickOutcomeType.TOUCHBACK)
+                val downedSpot = spot.coerceAtMost(Rules.FIELD_LENGTH_YDS - 1)
+                return kickOutcome(downedSpot, "Punt bounces and is downed at the $downedSpot.", false, false, intendedLandingYardLine, kickLandingYardLine, KickOutcomeType.DOWNED)
             }
-        return PlayOutcome.Kick(result)
+            if (kickLandingYardLine == 0) {
+                return kickOutcome(0, "Kick reaches the goal line untouched. Touchback.", true, false, intendedLandingYardLine, 0, KickOutcomeType.LANDING_ZONE_TOUCHBACK)
+            }
+            return kickOutcome(kickLandingYardLine, "Kick downed at the $kickLandingYardLine.", false, false, intendedLandingYardLine, kickLandingYardLine, KickOutcomeType.DOWNED)
+        }
+        if (playType == PlayType.PUNT && random.nextFloat() < PUNT_MUFF_CHANCE) {
+            val recoverer = (offense + defense).filter { it.currentPos.distance2DTo(ball) <= LOOSE_BALL_RECOVERY_RADIUS_YDS }.minByOrNull { it.currentPos.distance2DTo(ball) }
+                ?: (offense + defense).minByOrNull { it.currentPos.distance2DTo(ball) }
+            return kickOutcome(kickLandingYardLine, "Punt muffed and recovered!", false, false, intendedLandingYardLine, kickLandingYardLine, KickOutcomeType.MUFF_RECOVERED, recoverer?.isOffense == true, recoverer)
+        }
+        if (playType == PlayType.PUNT && offense.any { it.currentPos.distance2DTo(ball) <= FAIR_CATCH_COVERAGE_RADIUS_YDS } && random.nextFloat() < FAIR_CATCH_CHANCE) {
+            return kickOutcome(kickLandingYardLine, "Fair catch at the $kickLandingYardLine.", false, false, intendedLandingYardLine, kickLandingYardLine, KickOutcomeType.FAIR_CATCH)
+        }
+        // The returner must actually reach the ball; a distant catch cannot teleport them to it.
+        returner.currentPos = returner.currentPos.copy(z = 0f)
+        kickReturner = returner
+        ballCarrier = returner
+        carrierVelocity = Vector3D(0f, 0f, 0f)
+        return null
     }
 
-    private fun tickFieldGoal(): PlayOutcome? {
+    private fun tickKickReturn(tickDeltaSec: Float): PlayOutcome? {
+        val returner = kickReturner ?: return null
+        val start = returner.currentPos
+        MovementEngine.pursue(returner, returner.currentPos.copy(y = returner.currentPos.y - direction * DOWNFIELD_TARGET_YDS), tickDeltaSec)
+        carrierVelocity = Vector3D((returner.currentPos.x - start.x) / tickDeltaSec, (returner.currentPos.y - start.y) / tickDeltaSec, 0f)
+        ballPosition = returner.currentPos
+
+        activateReturnBlocking(returner, tickDeltaSec)
+        for (coverPlayer in offense) {
+            if (coverPlayer === kicker || isReturnBlocked(coverPlayer)) continue
+            MovementEngine.intercept(coverPlayer, returner.currentPos, carrierVelocity, tickDeltaSec)
+        }
+
+        val yardLine = receivingYardLine(returner.currentPos)
+        val returnYards = (yardLine - kickLandingYardLine).coerceAtLeast(0)
+        if (yardLine >= Rules.FIELD_LENGTH_YDS) {
+            return kickOutcome(Rules.FIELD_LENGTH_YDS, "TOUCHDOWN! $returnYards-yard kick return!", false, false, outcomeType = KickOutcomeType.RETURN_TOUCHDOWN)
+        }
+        if (returner.currentPos.x !in 0f..FieldGeometry.WIDTH_YDS) {
+            return kickOutcome(yardLine, "Kick returned $returnYards yards out of bounds.", false, false, outcomeType = KickOutcomeType.RETURN_OUT_OF_BOUNDS)
+        }
+        for (coverPlayer in offense) {
+            if (isReturnBlocked(coverPlayer) || coverPlayer.currentPos.distance2DTo(returner.currentPos) >= TACKLE_RADIUS_YDS) continue
+            if ((recoveringUntilSec[coverPlayer.id] ?: 0f) > elapsedSec) continue
+            if (random.nextFloat() < tackleChance(coverPlayer, returner)) {
+                if (random.nextFloat() < RETURN_FUMBLE_CHANCE) {
+                    val recoverer = (offense + defense).filter { it.currentPos.distance2DTo(returner.currentPos) <= LOOSE_BALL_RECOVERY_RADIUS_YDS }
+                        .minByOrNull { it.currentPos.distance2DTo(returner.currentPos) } ?: coverPlayer
+                    return kickOutcome(yardLine, "Return fumble recovered!", false, false, outcomeType = KickOutcomeType.RETURN_FUMBLE_RECOVERED, recoveredByKickingTeam = recoverer.isOffense, recoverer = recoverer)
+                }
+                return kickOutcome(yardLine, "Kick returned $returnYards yards to the $yardLine.", false, false, outcomeType = KickOutcomeType.RETURN_TACKLED)
+            }
+            evadeTackle(returner, coverPlayer)
+        }
+        if (elapsedSec >= MAX_PLAY_DURATION_SEC) {
+            return kickOutcome(yardLine, "Kick return ends at the $yardLine.", false, false, outcomeType = KickOutcomeType.RETURN_TACKLED)
+        }
+        return null
+    }
+
+    private fun activateReturnBlocking(returner: RunningPlayer, tickDeltaSec: Float) {
+        val availableCoverage = offense.filter { it !== kicker }.toMutableList()
+        for (blocker in defense.filter { it !== returner }.sortedBy { it.currentPos.distance2DTo(returner.currentPos) }) {
+            if (playType == PlayType.KICKOFF) {
+                val retreatY = kickoffBlockerStartY.getValue(blocker.id) + direction * KICKOFF_BLOCKER_RETREAT_YDS
+                if ((retreatY - blocker.currentPos.y) * direction > 0.05f) {
+                    blocker.blockingId = null
+                    MovementEngine.pursue(blocker, blocker.currentPos.copy(y = retreatY), tickDeltaSec)
+                    continue
+                }
+            }
+            val coverPlayer = availableCoverage.minByOrNull { cover ->
+                // Prefer coverage threatening the returner over a gunner already past the blocker's lane.
+                blocker.currentPos.distance2DTo(cover.currentPos) + cover.currentPos.distance2DTo(returner.currentPos) * RETURN_BLOCK_THREAT_WEIGHT
+            } ?: break
+            availableCoverage.remove(coverPlayer)
+            val distance = blocker.currentPos.distance2DTo(coverPlayer.currentPos)
+            blocker.blockingId = if (distance <= RETURN_BLOCK_CONTACT_YDS) coverPlayer.id else null
+            if (distance > RETURN_BLOCK_CONTACT_YDS) {
+                MovementEngine.intercept(blocker, coverPlayer.currentPos, Vector3D(0f, direction * coverPlayer.speedYdsPerSec, 0f), tickDeltaSec)
+            }
+        }
+    }
+
+    private fun isReturnBlocked(player: RunningPlayer): Boolean = defense.any { it.blockingId == player.id }
+
+    private fun receivingYardLine(position: Vector3D): Int {
+        val kickingYardLine = if (snap.isAttackingUp) position.y else Rules.FIELD_LENGTH_YDS - position.y
+        return (Rules.FIELD_LENGTH_YDS - kickingYardLine).toInt().coerceIn(0, Rules.FIELD_LENGTH_YDS)
+    }
+
+    private fun kickOutcome(
+        endYardLine: Int,
+        description: String,
+        isTouchback: Boolean,
+        isOutOfBounds: Boolean,
+        intendedLandingYardLine: Int = receivingYardLine(intendedKickTarget ?: ballPosition!!),
+        landingYardLine: Int = kickLandingYardLine,
+        outcomeType: KickOutcomeType,
+        recoveredByKickingTeam: Boolean = false,
+        recoverer: RunningPlayer? = null,
+    ) = PlayOutcome.Kick(
+        KickResult(
+            returnerId = kickReturner?.id,
+            recovererId = recoverer?.id,
+            endYardLine = endYardLine,
+            description = description,
+            isTouchback = isTouchback,
+            isOutOfBounds = isOutOfBounds,
+            intendedLandingYardLine = intendedLandingYardLine,
+            landingYardLine = landingYardLine,
+            returnYards = (endYardLine - landingYardLine).coerceAtLeast(0),
+            outcomeType = outcomeType,
+            recoveredByKickingTeam = recoveredByKickingTeam,
+        ),
+    )
+
+    private fun tickFieldGoal(tickDeltaSec: Float): PlayOutcome? {
         val kicker = kicker ?: return whistleDead()
         if (ballTrajectory == null) {
-            ballPosition = kicker.currentPos
+            val contact = holder?.currentPos ?: kicker.currentPos.copy(y = losWorldY - Rules.FIELD_GOAL_SNAP_DEPTH_YDS * direction)
+            ballPosition = contact
+            MovementEngine.moveToward(kicker, contact, FIELD_GOAL_APPROACH_SPEED_YDS_PER_SEC, tickDeltaSec)
             if (elapsedSec < FIELD_GOAL_HOLD_SEC) return null
-            kickFieldGoal(kicker)
+            kickFieldGoal(kicker, contact)
         }
 
         val trajectory = ballTrajectory ?: return null
@@ -259,15 +563,18 @@ class PlaySimulator(
         return fieldGoalResult?.let { PlayOutcome.FieldGoal(it) }
     }
 
-    private fun kickFieldGoal(kicker: RunningPlayer) {
+    private fun kickFieldGoal(
+        kicker: RunningPlayer,
+        contact: Vector3D,
+    ) {
         val distance = Rules.fieldGoalDistance(snap.losYardLine)
         val kickPower = kicker.attributes.kickPower
         val range = AttributeTranslator.calculateFieldGoalRangeYards(kickPower)
         val isBlocked =
             defense.any {
-                (it.role == PlayerRole.PASS_RUSHER || it.role == PlayerRole.BLITZER) &&
+                    (it.role == PlayerRole.PASS_RUSHER || it.role == PlayerRole.BLITZER) &&
                     !isBlocked(it) &&
-                    it.currentPos.distance2DTo(kicker.currentPos) <= KICK_BLOCK_RADIUS_YDS
+                    it.currentPos.distance2DTo(contact) <= KICK_BLOCK_RADIUS_YDS
             }
         val isGood =
             !isBlocked && random.nextFloat() < AttributeTranslator.calculateFieldGoalMakeChance(distance, kickPower, kicker.attributes.kickAccuracy)
@@ -277,7 +584,7 @@ class PlaySimulator(
         val (target, description) =
             when {
                 isBlocked -> {
-                    kicker.currentPos.copy(y = kicker.currentPos.y + 3f * direction, z = 0f) to "The $distance-yard kick is BLOCKED!"
+                    contact.copy(y = contact.y + 3f * direction, z = 0f) to "The $distance-yard kick is BLOCKED!"
                 }
 
                 isGood -> {
@@ -285,7 +592,7 @@ class PlaySimulator(
                 }
 
                 distance > range -> {
-                    Vector3D(FieldGeometry.CENTER_X, kicker.currentPos.y + range * direction, 0f) to "The $distance-yard kick falls short."
+                    Vector3D(FieldGeometry.CENTER_X, contact.y + range * direction, 0f) to "The $distance-yard kick falls short."
                 }
 
                 else -> {
@@ -297,15 +604,33 @@ class PlaySimulator(
                 }
             }
 
-        fieldGoalResult = FieldGoalResult(isGood, distance, description)
+        fieldGoalResult = FieldGoalResult(isGood, distance, description, kickerId = kicker.id)
         throwTimeSec = elapsedSec
         ballTrajectory =
             BallTrajectory(
-                startPos = kicker.currentPos,
+                startPos = contact,
                 targetPos = target,
-                totalFlightTimeSec = (kicker.currentPos.distance2DTo(target) / KICK_SPEED_YDS_PER_SEC).coerceAtLeast(MIN_KICK_FLIGHT_SEC),
+                totalFlightTimeSec = (contact.distance2DTo(target) / KICK_SPEED_YDS_PER_SEC).coerceAtLeast(MIN_KICK_FLIGHT_SEC),
                 apexHeightYards = if (isBlocked) 1f else FIELD_GOAL_APEX_YDS,
             )
+    }
+
+    /** The QB takes a knee: a yard lost, and the clock keeps running (the normal between-play runoff applies). */
+    private fun tickKneel(): PlayOutcome? {
+        if (elapsedSec < KNEEL_SEC) return null
+        log { "kneel" }
+        return PlayOutcome.Scrimmage(
+            PlayResult(-1, "QB takes a knee.", isTouchdown = false, isTurnover = false, actors = PlayActors(carrierId = ballCarrier?.id)),
+        )
+    }
+
+    /** The QB spikes it into the turf: an incomplete pass that stops the clock, so no runoff. */
+    private fun tickSpike(): PlayOutcome? {
+        if (elapsedSec < SPIKE_SEC) return null
+        log { "spike" }
+        return PlayOutcome.Scrimmage(
+            PlayResult(0, "Spike to stop the clock.", isTouchdown = false, isTurnover = false, clockStops = true, actors = PlayActors(passerId = passer?.id)),
+        )
     }
 
     private fun tickRun(): PlayOutcome? {
@@ -324,7 +649,13 @@ class PlaySimulator(
         if (snap.losYardLine + yardsGained >= Rules.FIELD_LENGTH_YDS) {
             val touchdownYards = Rules.FIELD_LENGTH_YDS - snap.losYardLine
             val description = if (isCatch) "TOUCHDOWN! $touchdownYards-yard catch and run!" else "TOUCHDOWN! $touchdownYards-yard run!"
-            return touchdown(yardsGained, withBrokenTackles(description))
+            return touchdown(
+                yardsGained,
+                withBrokenTackles(description),
+                actors = carrierActors(carrier, isCatch),
+                isPassComplete = isCatch,
+                isScramble = isScramble,
+            )
         }
 
         for (defender in defense) {
@@ -336,14 +667,30 @@ class PlaySimulator(
 
             val chance = tackleChance(defender, carrier) * (if (isEngaged) ENGAGED_TACKLE_FACTOR else 1f)
             if (random.nextFloat() < chance) {
+                log { "tackled by ${label(defender)} at ${formatYardLine(snap.losYardLine + yardsGained)}" }
                 val description = withBrokenTackles(if (isCatch) "Pass complete for $yardsGained yards!" else "Run for $yardsGained yards.")
-                return fumbleOrNull(carrier, defender, yardsGained, FUMBLE_CHANCE)
-                    ?: PlayOutcome.Scrimmage(PlayResult(yardsGained, description, isTouchdown = false, isTurnover = false))
+                val actors = carrierActors(carrier, isCatch, defender)
+                return fumbleOrNull(carrier, defender, yardsGained, FUMBLE_CHANCE, actors, isPassComplete = isCatch, isScramble = isScramble)
+                    ?: PlayOutcome.Scrimmage(
+                        PlayResult(yardsGained, description, isTouchdown = false, isTurnover = false, actors = actors, isPassComplete = isCatch, isScramble = isScramble),
+                    )
             }
             evadeTackle(carrier, defender)
         }
         return null
     }
+
+    /** Actors for a play where [carrier] has the ball: a receiver after a catch, a scrambling QB, or a runner. */
+    private fun carrierActors(
+        carrier: RunningPlayer,
+        isCatch: Boolean,
+        tackler: RunningPlayer? = null,
+    ) = PlayActors(
+        passerId = if (isCatch) passer?.id else null,
+        receiverId = if (isCatch) carrier.id else null,
+        carrierId = carrier.id,
+        tacklerId = tackler?.id,
+    )
 
     /** Better tacklers bring the carrier down more often; shifty or powerful carriers slip more tackles. */
     private fun tackleChance(
@@ -385,14 +732,37 @@ class PlaySimulator(
             else -> "${description.dropLast(1)}, breaking $brokenTackles tackles!"
         }
 
+    /**
+     * One seeded roll, the first time a pressured QB has a free rusher on him: a fast QB tucks it and runs. Checked before
+     * the QB's read each tick, because the brain treats any pressure as out-of-time and forces a throw. The window is
+     * the band between the sack radius and the pressure radius, since a rusher inside the sack radius gets him first.
+     * The QB's role is not mutated: he becomes the ball carrier, and [isScramble] switches the descriptions to a run.
+     */
+    private fun maybeScramble(qb: RunningPlayer): Boolean {
+        if (scrambleDecided || elapsedSec < SCRAMBLE_MIN_SEC) return false
+        val rushers = defense.filterNot(::isBlocked).map { qb.currentPos.distance2DTo(it.currentPos) }
+        if (rushers.any { it <= QbBrain.SACK_RADIUS_YDS } || rushers.none { it <= QbBrain.PRESSURE_RADIUS_YDS }) return false
+
+        scrambleDecided = true
+        val scrambleChance = (qb.attributes.speed / 150f).coerceIn(0.20f, 0.65f)
+        val scrambleRoll = random.nextFloat() // the one draw, exactly as before: logged after it is made, never rolled for the log
+        log { "scramble roll p=${scrambleChance.fixed(2)} roll=${scrambleRoll.fixed(2)} → ${if (scrambleRoll < scrambleChance) "SCRAMBLE" else "STAY"}" }
+        if (scrambleRoll >= scrambleChance) return false
+        ballCarrier = qb
+        isScramble = true
+        carrierVelocity = Vector3D(0f, 0f, 0f)
+        return true
+    }
+
     private fun tickPass(tickDeltaSec: Float): PlayOutcome? {
-        ballCarrier?.let { return tickBallCarrier(it, isCatch = true) }
+        ballCarrier?.let { return tickBallCarrier(it, isCatch = !isScramble) }
 
         val qb = passer ?: return whistleDead()
         val brain = qbBrain ?: return whistleDead()
 
         if (ballTrajectory == null) {
             ballPosition = qb.currentPos
+            if (maybeScramble(qb)) return tickBallCarrier(qb, isCatch = false)
             brain.evaluateTick(defense.filterNot(::isBlocked), tickDeltaSec)?.let { throwCommand ->
                 if (throwCommand.isThrowAway) return incomplete("Nobody open, the pass is thrown away.")
                 ballTrajectory = withThrowError(throwCommand.trajectory, qb.attributes.throwAccuracy)
@@ -404,9 +774,17 @@ class PlaySimulator(
             if (brain.state == QbState.SACKED) {
                 val yardsLost = (-yardsFromLos(qb.currentPos.y)).coerceAtLeast(0)
                 val sacker = defense.minByOrNull { it.currentPos.distance2DTo(qb.currentPos) } ?: return whistleDead()
-                return fumbleOrNull(qb, sacker, -yardsLost, STRIP_SACK_CHANCE)
+                val actors = PlayActors(passerId = qb.id, carrierId = qb.id, tacklerId = sacker.id)
+                return fumbleOrNull(qb, sacker, -yardsLost, STRIP_SACK_CHANCE, actors, isSack = true)
                     ?: PlayOutcome.Scrimmage(
-                        PlayResult(-yardsLost, "QB is SACKED for a loss of $yardsLost yards!", isTouchdown = false, isTurnover = false),
+                        PlayResult(
+                            -yardsLost,
+                            "QB is SACKED for a loss of $yardsLost yards!",
+                            isTouchdown = false,
+                            isTurnover = false,
+                            actors = actors,
+                            isSack = true,
+                        ),
                     )
             }
         }
@@ -426,7 +804,10 @@ class PlaySimulator(
                         ball.z <= it.verticalReach.maxCatchHeightYards
                 }
             if (undercut != null) {
-                return if (random.nextBoolean()) interception(ball) else incomplete("Pass batted down!")
+                val pickChance = interceptionChance(undercut.attributes.catching, undercut.attributes.awareness)
+                val pickRoll = random.nextFloat()
+                log { "lane: ${label(undercut)} gets a hand on it, p=${pickChance.fixed(2)} roll=${pickRoll.fixed(2)} → ${if (pickRoll < pickChance) "INTERCEPTED" else "BATTED DOWN"}" }
+                return if (pickRoll < pickChance) interception(ball, undercut) else incomplete("Pass batted down!")
             }
         }
 
@@ -446,18 +827,50 @@ class PlaySimulator(
         val contest = (1f - nearestDefenderYds / CONTEST_RADIUS_YDS).coerceIn(0f, 1f)
         val roll = random.nextFloat()
         when {
-            roll < contest * CONTESTED_INTERCEPTION_CHANCE -> return interception(ball)
-            roll < contest * (CONTESTED_INTERCEPTION_CHANCE + CONTESTED_BREAKUP_CHANCE) -> return incomplete("Pass broken up!")
-        }
-        val catchChance = BASE_CATCH_CHANCE + (receiver.attributes.catching - 75) / 300f
-        if (random.nextFloat() >= catchChance) return incomplete("Dropped pass!")
+            roll < contest * CONTESTED_INTERCEPTION_CHANCE -> {
+                log { "catch roll p=${(contest * CONTESTED_INTERCEPTION_CHANCE).fixed(2)} roll=${roll.fixed(2)} → INTERCEPTED" }
+                return interception(ball, defense.minByOrNull { it.currentPos.distance2DTo(ball) })
+            }
 
-        if (catchYardLine >= Rules.FIELD_LENGTH_YDS) return touchdown(yardsGained, "TOUCHDOWN! Pass complete in the end zone!")
+            roll < contest * (CONTESTED_INTERCEPTION_CHANCE + CONTESTED_BREAKUP_CHANCE) -> {
+                log { "catch roll p=${(contest * (CONTESTED_INTERCEPTION_CHANCE + CONTESTED_BREAKUP_CHANCE)).fixed(2)} roll=${roll.fixed(2)} → BROKEN UP" }
+                return incomplete("Pass broken up!")
+            }
+        }
+        val catchChance = catchChance(receiver.attributes.catching)
+        val catchRoll = random.nextFloat()
+        log { "catch roll p=${catchChance.fixed(2)} roll=${catchRoll.fixed(2)} → ${if (catchRoll < catchChance) "CAUGHT" else "DROPPED"}" }
+        if (catchRoll >= catchChance) return incomplete("Dropped pass!")
+
+        if (catchYardLine >= Rules.FIELD_LENGTH_YDS) {
+            return touchdown(
+                yardsGained,
+                "TOUCHDOWN! Pass complete in the end zone!",
+                actors = carrierActors(receiver, isCatch = true),
+                isPassComplete = true,
+            )
+        }
 
         // Caught: the receiver turns upfield and everyone chases
         receiver.currentPos = ball.copy(z = 0f)
         ballCarrier = receiver
         return null
+    }
+
+    /**
+     * Rotates a disguised coverage into its true call. Defenders are mutated in place (see [RunningPlayer]) so blocking
+     * and the overlay keep seeing the same objects. Rushers are never part of a rotation, so no block changes.
+     */
+    private fun applyRotation(plan: RotationPlan) {
+        hasRotated = true
+        for (defender in defense) {
+            val assignment = plan.assignments[defender.slot] ?: continue
+            defender.role = assignment.role
+            defender.coverageTargetId = assignment.coverageTargetId
+            defender.zoneLandmark = assignment.zoneLandmark
+            // Re-evaluate ball tracking against the new assignment with the usual awareness delays
+            defenderTracking.remove(defender.id)
+        }
     }
 
     private fun updateGazes(tickDeltaSec: Float) {
@@ -593,8 +1006,19 @@ class PlaySimulator(
         var hasLocatedBall: Boolean,
     )
 
-    private fun interception(ball: Vector3D) =
-        PlayOutcome.Scrimmage(PlayResult(yardsFromLos(ball.y), "INTERCEPTED!", isTouchdown = false, isTurnover = true, clockStops = true))
+    private fun interception(
+        ball: Vector3D,
+        interceptor: RunningPlayer?,
+    ) = PlayOutcome.Scrimmage(
+        PlayResult(
+            yardsFromLos(ball.y),
+            "INTERCEPTED!",
+            isTouchdown = false,
+            isTurnover = true,
+            clockStops = true,
+            actors = PlayActors(passerId = passer?.id, receiverId = targetReceiver?.id, interceptorId = interceptor?.id),
+        ),
+    )
 
     /**
      * The ball comes loose with a chance scaled by the hitter's tackling against the ball carrier's strength.
@@ -605,16 +1029,82 @@ class PlaySimulator(
         hitter: RunningPlayer,
         yardsGained: Int,
         baseChance: Float,
+        actors: PlayActors,
+        isPassComplete: Boolean = false,
+        isScramble: Boolean = false,
+        isSack: Boolean = false,
     ): PlayOutcome? {
         val chance = baseChance * hitter.attributes.tackle / carrier.attributes.strength.coerceAtLeast(1)
-        if (random.nextFloat() >= chance) return null
+        val fumbleRoll = random.nextFloat()
+        log { "fumble roll p=${chance.fixed(3)} roll=${fumbleRoll.fixed(3)} → ${if (fumbleRoll < chance) "FUMBLE" else "SECURE"}" }
+        if (fumbleRoll >= chance) return null
 
-        return if (random.nextBoolean()) {
-            PlayOutcome.Scrimmage(PlayResult(yardsGained, "FUMBLE! Recovered by the defense!", isTouchdown = false, isTurnover = true, clockStops = true))
+        val recovery = resolveFumbleRecovery(carrier)
+        log { "recovery: ${recovery.recoverer?.let(::label) ?: "nobody near"} (${if (recovery.defenseRecovers) "defense" else "offense"})" }
+        val withRecoverer = actors.copy(recovererId = recovery.recoverer?.id)
+        return if (recovery.defenseRecovers) {
+            PlayOutcome.Scrimmage(
+                PlayResult(
+                    yardsGained,
+                    "FUMBLE! Recovered by the defense!",
+                    isTouchdown = false,
+                    isTurnover = true,
+                    clockStops = true,
+                    actors = withRecoverer,
+                    isSack = isSack,
+                    isPassComplete = isPassComplete,
+                    isScramble = isScramble,
+                ),
+            )
         } else {
-            PlayOutcome.Scrimmage(PlayResult(yardsGained, "Fumble, but the offense falls on it.", isTouchdown = false, isTurnover = false))
+            PlayOutcome.Scrimmage(
+                PlayResult(
+                    yardsGained,
+                    "Fumble, but the offense falls on it.",
+                    isTouchdown = false,
+                    isTurnover = false,
+                    actors = withRecoverer,
+                    isSack = isSack,
+                    isPassComplete = isPassComplete,
+                    isScramble = isScramble,
+                ),
+            )
         }
     }
+
+    /** Who comes up with a loose ball, and which player of that side it is (null if nobody of that side is close). */
+    internal data class FumbleRecovery(
+        val defenseRecovers: Boolean,
+        val recoverer: RunningPlayer?,
+    )
+
+    /**
+     * The fumble spot is the carrier's position. Everyone within [LOOSE_BALL_RECOVERY_RADIUS_YDS] is in the scrum, each
+     * weighted by awareness; the defense recovers with the share of the weight it holds. The nearest player of the
+     * winning side gets the ball. With nobody around it is a coin flip.
+     */
+    internal fun resolveFumbleRecovery(carrier: RunningPlayer): FumbleRecovery {
+        val spot = carrier.currentPos
+        val nearby = (offense + defense).filter { it.currentPos.distance2DTo(spot) <= LOOSE_BALL_RECOVERY_RADIUS_YDS }
+
+        fun weight(player: RunningPlayer) = 1f + player.attributes.awareness / 100f
+        val defenseWeight = nearby.filter { !it.isOffense }.sumOf { weight(it).toDouble() }.toFloat()
+        val offenseWeight = nearby.filter { it.isOffense }.sumOf { weight(it).toDouble() }.toFloat()
+        val total = defenseWeight + offenseWeight
+
+        val defenseRecovers = if (total == 0f) random.nextBoolean() else random.nextFloat() < defenseWeight / total
+        val recoverer = nearby.filter { it.isOffense != defenseRecovers }.minByOrNull { it.currentPos.distance2DTo(spot) }
+        return FumbleRecovery(defenseRecovers, recoverer)
+    }
+
+    /** Chance a defender under a throw picks it off rather than only batting it down. */
+    internal fun interceptionChance(
+        catching: Int,
+        awareness: Int,
+    ): Float = (0.35f + (catching + awareness - 100) / 400f).coerceIn(0.15f, 0.75f)
+
+    /** Chance a receiver hauls in a catchable ball: clamped so even a 99-catching receiver can drop one. */
+    internal fun catchChance(catching: Int): Float = (BASE_CATCH_CHANCE + (catching - 75) / 300f).coerceIn(0.50f, 0.99f)
 
     /** Scatters the intended catch point within the QB's accuracy radius for that distance. */
     private fun withThrowError(
@@ -643,16 +1133,60 @@ class PlaySimulator(
     private fun touchdown(
         yardsGained: Int,
         description: String,
-    ) = PlayOutcome.Scrimmage(PlayResult(yardsGained, description, isTouchdown = true, isTurnover = false, clockStops = true))
+        actors: PlayActors = PlayActors(),
+        isPassComplete: Boolean = false,
+        isScramble: Boolean = false,
+    ) = PlayOutcome.Scrimmage(
+        PlayResult(
+            yardsGained,
+            description,
+            isTouchdown = true,
+            isTurnover = false,
+            clockStops = true,
+            actors = actors,
+            isPassComplete = isPassComplete,
+            isScramble = isScramble,
+        ),
+    )
 
-    private fun incomplete(description: String) = PlayOutcome.Scrimmage(PlayResult(0, description, isTouchdown = false, isTurnover = false, clockStops = true))
+    /** An incomplete pass: the passer threw it (an attempt), whoever it was meant for is recorded if there was a target. */
+    private fun incomplete(description: String) =
+        PlayOutcome.Scrimmage(
+            PlayResult(
+                0,
+                description,
+                isTouchdown = false,
+                isTurnover = false,
+                clockStops = true,
+                actors = PlayActors(passerId = passer?.id, receiverId = targetReceiver?.id),
+            ),
+        )
 
     private fun whistleDead() = PlayOutcome.Scrimmage(PlayResult(0, "Play whistled dead.", isTouchdown = false, isTurnover = false, clockStops = true))
 
     companion object {
         const val MAX_PLAY_DURATION_SEC = 15f // Safety timeout
+        private const val SCRAMBLE_MIN_SEC = 1.0f
+        private const val KNEEL_SEC = 0.5f
+        private const val SPIKE_SEC = 0.3f
         private const val KICK_APEX_YDS = 30f
-        private const val SIMPLIFIED_RETURN_YDS = 15
+        private const val END_ZONE_BACKLINE_MARGIN_YDS = 1f
+        private const val END_ZONE_CROSS_TARGET_YDS = 15f
+        private const val PUNT_BLOCK_RADIUS_YDS = 1.5f
+        private const val KICK_FIELDING_RADIUS_YDS = 1.5f
+        private const val PUNT_BOUNCE_YDS = 9
+        private const val LOOSE_BALL_RECOVERY_RADIUS_YDS = 5f
+        private const val FAIR_CATCH_COVERAGE_RADIUS_YDS = 12f
+        private const val FAIR_CATCH_CHANCE = 0.75f
+        private const val PUNT_MUFF_CHANCE = 0.04f
+        private const val RETURN_FUMBLE_CHANCE = 0.015f
+        private const val KICK_OPERATION_SEC = 0.65f
+        private const val KICK_APPROACH_YDS = 4f
+        private const val KICK_COVERAGE_SPRINT_YDS = 80f
+        private const val PUNT_RETURN_LANE_DEPTH_YDS = 12f
+        private const val RETURN_BLOCK_CONTACT_YDS = 2.5f
+        private const val KICKOFF_BLOCKER_RETREAT_YDS = 3f
+        private const val RETURN_BLOCK_THREAT_WEIGHT = 0.5f
         private const val TACKLE_RADIUS_YDS = 1.6f
         private const val BASE_TACKLE_CHANCE = 0.88f
         private const val ENGAGED_TACKLE_RADIUS_YDS = 1.2f
@@ -685,11 +1219,18 @@ class PlaySimulator(
         private const val FUMBLE_CHANCE = 0.012f
         private const val STRIP_SACK_CHANCE = 0.1f
         private const val FIELD_GOAL_HOLD_SEC = 1.3f
+        private const val FIELD_GOAL_APPROACH_SPEED_YDS_PER_SEC = 5f
         private const val FIELD_GOAL_APEX_YDS = 10f
         private const val KICK_SPEED_YDS_PER_SEC = 25f
         private const val MIN_KICK_FLIGHT_SEC = 0.4f
         private const val KICK_BLOCK_RADIUS_YDS = 1.5f
         private const val CROSSBAR_HEIGHT_YDS = 3.33f
         private const val GOAL_POSTS_HALF_WIDTH_YDS = 3.08f
+    }
+
+    private enum class KickPhase {
+        OPERATION,
+        FLIGHT,
+        RETURN,
     }
 }

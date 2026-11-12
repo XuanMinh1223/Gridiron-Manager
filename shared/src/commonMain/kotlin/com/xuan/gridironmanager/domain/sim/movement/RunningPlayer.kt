@@ -33,13 +33,16 @@ data class RunningPlayer(
     /** The position this player is lined up at for the current play. */
     val position: Position? = null,
     val attributes: PlayerAttributes = PlayerAttributes.AVERAGE,
-    val role: PlayerRole = PlayerRole.ROUTE_ONLY,
+    // role, coverageTargetId and zoneLandmark are mutable so a disguised coverage can rotate defenders in place:
+    // BlockingModel, TacticalOverlay and the presenter all hold references to these same objects, so replacing
+    // them at rotation would leave those references stale.
+    var role: PlayerRole = PlayerRole.ROUTE_ONLY,
     /** Formation slot this player lined up in, e.g. "X" or "MLB". */
     val slot: String? = null,
     /** For [PlayerRole.MAN_COVERAGE]: the id of the receiver being covered. */
-    val coverageTargetId: String? = null,
+    var coverageTargetId: String? = null,
     /** For [PlayerRole.ZONE_COVERAGE]: the spot on the field this defender drops to. */
-    val zoneLandmark: Vector3D? = null,
+    var zoneLandmark: Vector3D? = null,
     /** For blockers: the id of the defender they are currently engaged with. */
     var blockingId: String? = null,
 )

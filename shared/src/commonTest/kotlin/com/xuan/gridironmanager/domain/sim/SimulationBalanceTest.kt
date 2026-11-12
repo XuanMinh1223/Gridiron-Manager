@@ -96,6 +96,16 @@ class SimulationBalanceTest {
                 box.punts++
             }
 
+            // Counting fixes for the situational plays: a kneel is a one-yard rush loss, a spike an incomplete pass
+            PlayType.KNEEL -> {
+                box.rushes++
+                box.rushYards += -1
+            }
+
+            PlayType.SPIKE -> {
+                box.passAttempts++
+            }
+
             PlayType.KICKOFF -> {}
         }
     }

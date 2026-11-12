@@ -2,10 +2,15 @@ package com.xuan.gridironmanager.ui.match
 
 import com.xuan.gridironmanager.domain.model.Matchup
 import com.xuan.gridironmanager.domain.model.PlayType
+import com.xuan.gridironmanager.domain.model.PlayerAttributes
+import com.xuan.gridironmanager.domain.model.Position
 import com.xuan.gridironmanager.domain.sim.MatchSimulator
+import com.xuan.gridironmanager.domain.sim.ai.CoverageRead
 import com.xuan.gridironmanager.domain.sim.match.GamePhase
 import com.xuan.gridironmanager.domain.sim.match.GameState
+import com.xuan.gridironmanager.domain.sim.match.GameStats
 import com.xuan.gridironmanager.domain.sim.match.PlayOutcome
+import com.xuan.gridironmanager.domain.sim.match.UNKNOWN_SEED
 import com.xuan.gridironmanager.domain.sim.movement.RunningPlayer
 import com.xuan.gridironmanager.domain.sim.play.Snap
 import com.xuan.gridironmanager.domain.sim.playbook.DefensiveCall
@@ -33,6 +38,8 @@ class MatchPresenter(
     private val simDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val random: Random = Random.Default,
     private val userIsHome: Boolean = true,
+    /** The seed [random] was made from, shown in the debug log. Unknown unless the caller says. */
+    private val seed: Long = UNKNOWN_SEED,
 ) : MatchActions {
     private val _uiState = MutableStateFlow(MatchUiState())
     val uiState: StateFlow<MatchUiState> = _uiState.asStateFlow()
@@ -44,18 +51,23 @@ class MatchPresenter(
     private var cpuOffense: OffensivePlay? = null
     private var cpuDefense: DefensiveCall? = null
 
+    // The user's QB's pre-snap read of the CPU's coverage, if it is disguised and the user is on offense
+    private var userQbIdentified: Boolean? = null
+
     fun startMatch(
         matchup: Matchup,
         initialState: GameState = GameState.openingKickoff(),
     ) {
         currentMatchup = matchup
-        simulator = MatchSimulator(matchup, random)
-        _uiState.update { it.copy(gameState = initialState, isMatchReady = true) }
+        // A new game is a new simulator, so its debug log starts empty; the toggle is the user's and carries over
+        simulator = MatchSimulator(matchup, random, seed = seed).also { it.debugEnabled = _uiState.value.isDebugMode }
+        _uiState.update { it.copy(gameState = initialState, gameStats = GameStats(), debugLog = "", isMatchReady = true) }
         preparePlayCalls()
         showPreview()
     }
 
     override fun setDebugMode(enabled: Boolean) {
+        simulator?.debugEnabled = enabled
         _uiState.update { it.copy(isDebugMode = enabled) }
     }
 
@@ -94,7 +106,9 @@ class MatchPresenter(
         val current = _uiState.value
         if (current.isPlayRunning || current.gameState.isGameOver) return
 
-        val state = current.gameState
+        // If the CPU has the ball it may call a timeout; if the user has it, only the user's button can
+        val userHasBall = current.gameState.isHomePossession == userIsHome
+        val state = if (userHasBall) current.gameState else simulator.maybeCallTimeout(current.gameState)
         val offensivePlay = offensiveCallForSnap(current.playCall) ?: return
         val defensiveCall = defensiveCallForSnap(current.playCall) ?: return
         val snap = simulator.lineUp(state, offensivePlay, defensiveCall)
@@ -108,7 +122,7 @@ class MatchPresenter(
         }
 
         scope.launch(simDispatcher) {
-            val play = simulator.startPlay(snap)
+            val play = simulator.startPlay(snap, userQbIdentified)
             var outcome: PlayOutcome?
             do {
                 delay(scaledMillis(TICK_MILLIS).milliseconds)
@@ -124,11 +138,18 @@ class MatchPresenter(
                 }
             } while (outcome == null)
 
+            // Record before resolving: resolve files the debug log block, which reports this play's recorded stats
+            simulator.recordPlay(state, snap, outcome)
+            simulator.playCaller.recordPlay(state, offensivePlay, defensiveCall)
             val nextState = simulator.resolve(state, outcome, play.elapsedSec)
-            val summary = "${outcome.description} (${offensivePlay.name} vs ${defensiveCall.name})"
+            val summary =
+                if (state.phase == GamePhase.KICKOFF) outcome.description
+                else "${outcome.description} (${offensivePlay.name} vs ${defensiveCall.name})"
             _uiState.update {
                 it.copy(
                     gameState = nextState,
+                    gameStats = simulator.gameStats,
+                    debugLog = simulator.debugLogText,
                     isPlayRunning = false,
                     playByPlayText = if (nextState.isGameOver) "$summary That's the final whistle!" else summary,
                     ballPosition = null,
@@ -143,6 +164,12 @@ class MatchPresenter(
         }
     }
 
+    override fun callTimeout() {
+        val current = _uiState.value
+        if (current.isPlayRunning || current.gameState.isGameOver || current.gameState.phase == GamePhase.KICKOFF) return
+        _uiState.update { it.copy(gameState = it.gameState.withTimeoutCalled()) }
+    }
+
     override fun quickSim() {
         val simulator = simulator ?: return
         val current = _uiState.value
@@ -154,6 +181,8 @@ class MatchPresenter(
             _uiState.update {
                 it.copy(
                     gameState = finalState,
+                    gameStats = simulator.gameStats,
+                    debugLog = simulator.debugLogText,
                     isPlayRunning = false,
                     players = emptyList(),
                     lineOfScrimmageY = null,
@@ -175,15 +204,23 @@ class MatchPresenter(
         cpuDefense = simulator.playCaller.callDefense(state)
         val isUserOnOffense = state.isHomePossession == userIsHome
 
+        // The human QB's read of a disguised coverage is rolled once per play, here, and handed to the simulator at the
+        // snap so the hint and the play always agree. The CPU's true call stays out of the UI state.
+        val disguisedCall = cpuDefense?.takeIf { isUserOnOffense && it.disguise != null && state.phase != GamePhase.KICKOFF }
+        userQbIdentified = disguisedCall?.let { CoverageRead.roll(userQbAttributes(), random) }
+        val coverageHint = disguisedCall?.let { call -> userQbIdentified?.let { CoverageRead.hint(call, it) } }
+
         _uiState.update {
             it.copy(
                 playCall =
                     it.playCall.copy(
                         isUserOnOffense = isUserOnOffense,
                         offenseOptions = if (isUserOnOffense) Playbook.offensivePlaysFor(state.phase) else emptyList(),
-                        defenseOptions = if (!isUserOnOffense && state.phase != GamePhase.KICKOFF) Playbook.defensiveCalls else emptyList(),
+                        defenseOptions = if (!isUserOnOffense && state.phase != GamePhase.KICKOFF) Playbook.defenseOptions else emptyList(),
                         selectedOffense = cpuOffense,
-                        selectedDefense = cpuDefense,
+                        // Only the user's own call is exposed: on offense the CPU's call may be a disguise
+                        selectedDefense = if (isUserOnOffense) null else cpuDefense,
+                        coverageHint = coverageHint,
                     ),
             )
         }
@@ -214,6 +251,11 @@ class MatchPresenter(
         }
     }
 
+    private fun userQbAttributes(): PlayerAttributes {
+        val roster = currentMatchup?.let { if (userIsHome) it.homeRoster else it.awayRoster }.orEmpty()
+        return roster.firstOrNull { it.position == Position.QB.abbreviation }?.attributes ?: PlayerAttributes.AVERAGE
+    }
+
     private fun MatchUiState.withLineup(
         snap: Snap,
         state: GameState,
@@ -224,6 +266,7 @@ class MatchPresenter(
             players = snap.offense + snap.defense,
             lineOfScrimmageY = snap.losWorldY,
             firstDownMarkerY = if (showsFirstDownLine) snap.losWorldY + state.distance * direction else null,
+            isAttackingUp = snap.isAttackingUp,
         )
     }
 
@@ -255,6 +298,8 @@ class MatchPresenter(
             PlayType.PASS -> "Ball is snapped!"
             PlayType.KICKOFF, PlayType.PUNT -> "Ready for the kick!"
             PlayType.FIELD_GOAL -> "The snap, the hold..."
+            PlayType.KNEEL -> "Victory formation..."
+            PlayType.SPIKE -> "Quick snap!"
         }
 
     private companion object {

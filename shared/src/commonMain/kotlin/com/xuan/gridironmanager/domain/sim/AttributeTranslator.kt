@@ -14,6 +14,18 @@ object AttributeTranslator {
         return 4.0f + (rating / 99.0f) * 6.0f
     }
 
+    /** Pass velocity in yards/sec. A 50-throwPower QB throws at the old fixed 20 yd/s. */
+    fun calculatePassSpeedYdsPerSec(throwPower: Int): Float {
+        val rating = throwPower.coerceIn(0, 99).toFloat()
+        return 18f + rating * 0.04f // 50 -> 20.0, 80 -> 21.2, 99 -> 21.96, 30 -> 19.2
+    }
+
+    /** Farthest a QB can throw, in yards. Only binds for weak arms with generated rosters. */
+    fun calculateMaxThrowDistanceYds(throwPower: Int): Float {
+        val rating = throwPower.coerceIn(0, 99).toFloat()
+        return 35f + rating * 0.25f // 50 -> 47.5, 80 -> 55.0, 99 -> 59.75
+    }
+
     /**
      * Calculates max catch height in yards based on height and jump rating.
      * 99 jump = 40 inches
@@ -51,6 +63,13 @@ object AttributeTranslator {
     fun calculateKickDistanceYards(kickPower: Int): Float {
         val rating = kickPower.coerceIn(0, 99).toFloat()
         return 30.0f + (rating / 99.0f) * 45.0f
+    }
+
+    /** Placement error in yards. Accurate kickers produce a much tighter landing distribution. */
+    fun calculateKickPlacementError(kickAccuracy: Int, kickDistanceYards: Float): Float {
+        val rating = kickAccuracy.coerceIn(0, 99).toFloat()
+        val variance = 9.0f - (rating / 99.0f) * 7.5f
+        return variance * (kickDistanceYards / 50.0f).coerceAtLeast(0.5f)
     }
 
     /**

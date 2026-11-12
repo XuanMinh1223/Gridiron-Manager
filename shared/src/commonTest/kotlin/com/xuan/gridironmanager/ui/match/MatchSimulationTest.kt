@@ -42,6 +42,18 @@ class MatchSimulationTest {
         }
 
     @Test
+    fun testKickoffSummaryDoesNotShowDefensivePlay() =
+        testScope.runTest {
+            val presenter = presenter()
+            presenter.startMatch(matchup)
+
+            presenter.snapBall()
+            advanceUntilIdle()
+
+            assertFalse(presenter.uiState.value.playByPlayText.contains(" vs "))
+        }
+
+    @Test
     fun testGameClockRunsInRealTimeDuringPlay() =
         testScope.runTest {
             val presenter = presenter()
@@ -50,9 +62,9 @@ class MatchSimulationTest {
             presenter.snapBall()
             advanceUntilIdle()
 
-            // A kick hangs for at most ~5.2 seconds, and the clock stops on the change of possession
+            // Operation, flight, and the live return all run game clock until the change of possession.
             val clockSeconds = presenter.uiState.value.gameState.clockSeconds
-            assertTrue(clockSeconds in 894..899, "Expected ~5s off the clock but it read $clockSeconds")
+            assertTrue(clockSeconds in 888..899, "Expected a live special-teams play but the clock read $clockSeconds")
         }
 
     @Test
@@ -93,7 +105,7 @@ class MatchSimulationTest {
 
             val playCall = presenter.uiState.value.playCall
             assertFalse(playCall.isUserOnOffense)
-            assertEquals(Playbook.defensiveCalls, playCall.defenseOptions)
+            assertEquals(Playbook.defenseOptions, playCall.defenseOptions)
             assertTrue(playCall.offenseOptions.isEmpty())
         }
 

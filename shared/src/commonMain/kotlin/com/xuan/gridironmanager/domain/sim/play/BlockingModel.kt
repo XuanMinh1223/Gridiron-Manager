@@ -33,6 +33,9 @@ class BlockingModel(
     private val blocks: List<Block>
     private val blocksByDefenderId: Map<String, Block>
 
+    /** Diagnostic hook: told (defender, blocker) when a defender sheds a block. Never influences the blocking itself. */
+    var onShed: ((RunningPlayer, RunningPlayer) -> Unit)? = null
+
     init {
         val available = offense.filter { it.role == PlayerRole.BLOCKER }.toMutableList()
         val rushers = defense.filter { it.role == PlayerRole.PASS_RUSHER || it.role == PlayerRole.BLITZER }
@@ -43,7 +46,7 @@ class BlockingModel(
             available.remove(blocker)
             val block = Block(blocker, defender, winRatePerSec(blocker, defender, random))
             // Linemen facing each other across the line are engaged from the snap
-            if (blocker.currentPos.distance2DTo(defender.currentPos) <= LINE_CONTACT_YDS) {
+            if (blocker.currentPos.distance2DTo(defender.currentPos) <= CONTACT_YDS) {
                 block.isEngaged = true
                 blocker.blockingId = defender.id
             }
@@ -99,6 +102,7 @@ class BlockingModel(
             if (block.progress >= 1f) {
                 block.isShed = true
                 blocker.blockingId = null
+                onShed?.invoke(defender, blocker)
                 continue
             }
 
@@ -146,7 +150,6 @@ class BlockingModel(
 
     private companion object {
         const val CONTACT_YDS = 1.2f
-        const val LINE_CONTACT_YDS = 2.5f
         const val DRIVE_SPEED_YDS_PER_SEC = 0.8f
         const val DOUBLE_TEAM_FACTOR = 0.8f
         const val SECOND_LEVEL_REACH_YDS = 8f

@@ -1,7 +1,12 @@
 package com.xuan.gridironmanager.ui.match.components
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -10,6 +15,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.xuan.gridironmanager.domain.model.Vector3D
 import com.xuan.gridironmanager.domain.sim.FieldGeometry
@@ -21,21 +27,25 @@ import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
 
+private const val MIN_ZOOM = 1f
+private const val MAX_ZOOM = 3f
+
 private const val END_ZONE_DEPTH_YDS = 10f
 private const val FIELD_LENGTH_WITH_END_ZONES_YDS = 120f
-private const val ZONE_MARKER_RADIUS_YDS = 4f
+// Shared with the play preview cards so their diagrams use the field's visual language
+internal const val ZONE_MARKER_RADIUS_YDS = 4f
 
-private val GrassColor = Color(0xFF2E7D32)
+internal val GrassColor = Color(0xFF2E7D32)
 private val EndZoneColor = Color(0xFF1B5E20)
-private val LineOfScrimmageColor = Color(0xFF4FC3F7)
+internal val LineOfScrimmageColor = Color(0xFF4FC3F7)
 private val FirstDownColor = Color(0xFFFFEB3B)
-private val OffenseColor = Color(0xFF0D47A1)
-private val DefenseColor = Color(0xFFC62828)
-private val RouteColor = Color(0xFFFFF176)
+internal val OffenseColor = Color(0xFF0D47A1)
+internal val DefenseColor = Color(0xFFC62828)
+internal val RouteColor = Color(0xFFFFF176)
 private val ManLinkColor = Color.White.copy(alpha = 0.7f)
-private val DeepZoneColor = Color(0xFF42A5F5)
-private val UnderneathZoneColor = Color(0xFFFFCA28)
-private val BlitzColor = Color(0xFFFF5252)
+internal val DeepZoneColor = Color(0xFF42A5F5)
+internal val UnderneathZoneColor = Color(0xFFFFCA28)
+internal val BlitzColor = Color(0xFFFF5252)
 private val BlockColor = Color(0xFFFF9800)
 
 /**
@@ -50,9 +60,20 @@ fun FieldCanvas(
     lineOfScrimmageY: Float? = null,
     firstDownMarkerY: Float? = null,
     overlay: TacticalOverlay = TacticalOverlay.NONE,
+    isAttackingUp: Boolean = true,
+    offensePalette: TeamPalette = TeamPalette(OffenseColor, Color.White),
+    defensePalette: TeamPalette = TeamPalette(DefenseColor, Color.White),
 ) {
-    Canvas(modifier = modifier) {
-        val field = FieldTransform(size)
+    var camera by remember { mutableStateOf(CameraState()) }
+    Canvas(
+        modifier = modifier.pointerInput(Unit) {
+            detectTransformGestures { _, pan, zoomChange, _ ->
+                val nextZoom = (camera.zoom * zoomChange).coerceIn(MIN_ZOOM, MAX_ZOOM)
+                camera = camera.copy(zoom = nextZoom, pan = camera.pan + pan)
+            }
+        },
+    ) {
+        val field = FieldTransform(size, camera, isAttackingUp)
 
         drawField(field)
         lineOfScrimmageY?.let { drawYardLine(field, it, LineOfScrimmageColor) }
@@ -60,12 +81,14 @@ fun FieldCanvas(
         drawOverlay(field, overlay)
 
         players.forEach { player ->
+            val palette = if (player.isOffense) offensePalette else defensePalette
+            val center = field.toOffset(player.currentPos)
             drawCircle(
-                color = if (player.isOffense) OffenseColor else DefenseColor,
+                color = palette.primary,
                 radius = 6.dp.toPx(),
-                center = field.toOffset(player.currentPos),
+                center = center,
             )
-            drawCircle(color = Color.White, radius = 6.dp.toPx(), center = field.toOffset(player.currentPos), style = Stroke(1.dp.toPx()))
+            drawCircle(color = palette.secondary, radius = 6.dp.toPx(), center = center, style = Stroke(1.dp.toPx()))
         }
 
         ballPos?.let { pos ->
@@ -79,18 +102,29 @@ fun FieldCanvas(
     }
 }
 
+data class CameraState(
+    val zoom: Float = MIN_ZOOM,
+    val pan: Offset = Offset.Zero,
+)
+
 /** Maps world yards to canvas pixels, centring the field in the available space. */
 private class FieldTransform(
     canvasSize: Size,
+    camera: CameraState,
+    isAttackingUp: Boolean,
 ) {
-    val scale = min(canvasSize.width / FieldGeometry.WIDTH_YDS, canvasSize.height / FIELD_LENGTH_WITH_END_ZONES_YDS)
+    val scale = min(canvasSize.width / FieldGeometry.WIDTH_YDS, canvasSize.height / FIELD_LENGTH_WITH_END_ZONES_YDS) * camera.zoom
     val width = FieldGeometry.WIDTH_YDS * scale
     val height = FIELD_LENGTH_WITH_END_ZONES_YDS * scale
-    val left = (canvasSize.width - width) / 2
-    val top = (canvasSize.height - height) / 2
+    val left = (canvasSize.width - width) / 2 + camera.pan.x
+    val top = (canvasSize.height - height) / 2 + camera.pan.y
+    private val attackingUp = isAttackingUp
 
-    /** World y runs from the home goal line (0) upwards, with the home end zone at the bottom of the screen. */
-    fun toOffset(pos: Vector3D) = Offset(left + pos.x * scale, top + (FIELD_LENGTH_WITH_END_ZONES_YDS - (pos.y + END_ZONE_DEPTH_YDS)) * scale)
+    /** World y spans -10..110; mirror around midfield, then offset by the near end zone. */
+    fun toOffset(pos: Vector3D): Offset {
+        val worldY = if (attackingUp) pos.y else 100f - pos.y
+        return Offset(left + pos.x * scale, top + (worldY + END_ZONE_DEPTH_YDS) * scale)
+    }
 
     fun yToPx(worldY: Float) = toOffset(Vector3D(0f, worldY, 0f)).y
 }
@@ -98,11 +132,7 @@ private class FieldTransform(
 private fun DrawScope.drawField(field: FieldTransform) {
     drawRect(GrassColor, topLeft = Offset(field.left, field.top), size = Size(field.width, field.height))
     drawRect(EndZoneColor, topLeft = Offset(field.left, field.top), size = Size(field.width, END_ZONE_DEPTH_YDS * field.scale))
-    drawRect(
-        EndZoneColor,
-        topLeft = Offset(field.left, field.yToPx(0f)),
-        size = Size(field.width, END_ZONE_DEPTH_YDS * field.scale),
-    )
+    drawRect(EndZoneColor, topLeft = Offset(field.left, field.top + field.height - END_ZONE_DEPTH_YDS * field.scale), size = Size(field.width, END_ZONE_DEPTH_YDS * field.scale))
 
     // Yard lines every 5 yards, goal lines bold
     for (yard in 0..100 step 5) {
@@ -203,7 +233,7 @@ private fun DrawScope.drawArrow(
     drawArrowHead(from, to, color)
 }
 
-private fun DrawScope.drawArrowHead(
+internal fun DrawScope.drawArrowHead(
     from: Offset,
     to: Offset,
     color: Color,

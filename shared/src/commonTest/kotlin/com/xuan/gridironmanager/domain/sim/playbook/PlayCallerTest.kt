@@ -69,6 +69,6 @@ class PlayCallerTest {
     fun testDefenseAlwaysPicksFromTheScrimmageCalls() {
         val calls = (1..50).map { playCaller.callDefense(GameState(down = 3, distance = 12)) }
 
-        assertTrue(calls.all { it in Playbook.defensiveCalls })
+        assertTrue(calls.all { it in Playbook.defenseOptions })
     }
 }

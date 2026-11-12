@@ -61,8 +61,24 @@ data class Player(
 ) {
     val fullName: String get() = "$firstName $lastName"
 
+    /** The average of the four ratings that matter most at this player's position. */
     val overallRating: Int get() {
-        return (attributes.speed + attributes.acceleration + attributes.strength + attributes.awareness) / 4
+        val a = attributes
+        val sum =
+            when (Position.entries.find { it.abbreviation == position }) {
+                Position.QB -> a.throwAccuracy + a.throwPower + a.awareness + a.speed
+                Position.RB -> a.speed + a.acceleration + a.strength + a.catching
+                Position.WR -> a.speed + a.catching + a.routeRunning + a.acceleration
+                Position.TE -> a.catching + a.strength + a.blockPass + a.speed
+                Position.OT, Position.OG, Position.C, Position.OL -> a.blockPass + a.strength + a.awareness + a.speed
+                Position.EDGE, Position.DT, Position.DL -> a.strength + a.tackle + a.speed + a.awareness
+                Position.LB -> a.tackle + a.speed + a.awareness + a.playRecognition
+                Position.CB -> a.speed + a.awareness + a.playRecognition + a.acceleration
+                Position.S -> a.tackle + a.awareness + a.playRecognition + a.speed
+                Position.K, Position.P -> a.kickPower + a.kickAccuracy + a.awareness + a.speed
+                null -> a.speed + a.acceleration + a.strength + a.awareness
+            }
+        return sum / 4
     }
 }
 

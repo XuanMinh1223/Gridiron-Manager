@@ -1,7 +1,9 @@
 package com.xuan.gridironmanager.ui.match
 
 import com.xuan.gridironmanager.domain.model.Vector3D
+import com.xuan.gridironmanager.domain.sim.ai.CoverageHint
 import com.xuan.gridironmanager.domain.sim.match.GameState
+import com.xuan.gridironmanager.domain.sim.match.GameStats
 import com.xuan.gridironmanager.domain.sim.movement.RunningPlayer
 import com.xuan.gridironmanager.domain.sim.playbook.DefensiveCall
 import com.xuan.gridironmanager.domain.sim.playbook.OffensivePlay
@@ -9,6 +11,8 @@ import com.xuan.gridironmanager.ui.match.overlay.TacticalOverlay
 
 data class MatchUiState(
     val gameState: GameState = GameState.openingKickoff(),
+    /** The box score so far. Display only. */
+    val gameStats: GameStats = GameStats(),
     val players: List<RunningPlayer> = emptyList(),
     val ballPosition: Vector3D? = null,
     val playByPlayText: String = "Ready for kick-off",
@@ -19,8 +23,13 @@ data class MatchUiState(
     val playCall: PlayCallState = PlayCallState(),
     val simSpeed: SimSpeed = SimSpeed.X1,
     val showAssignments: Boolean = true,
+    /** Session-only debug toggle (off by default): turns on per-play logging and shows the log panel. */
     val isDebugMode: Boolean = false,
+    /** The whole game's debug log, one block per play. Empty unless debugging has been on. Display only. */
+    val debugLog: String = "",
     val overlay: TacticalOverlay = TacticalOverlay.NONE,
+    /** Direction of the currently previewed/live offense in world coordinates. */
+    val isAttackingUp: Boolean = true,
 )
 
 /** The user's play-calling options for the next snap. */
@@ -34,6 +43,8 @@ data class PlayCallState(
     val defenseOptions: List<DefensiveCall> = emptyList(),
     val selectedOffense: OffensivePlay? = null,
     val selectedDefense: DefensiveCall? = null,
+    /** The user QB's pre-snap read of a disguised coverage. Never derived from the true call when the read failed. */
+    val coverageHint: CoverageHint? = null,
 ) {
     /** Whether there is a meaningful choice for the user to make before the snap. */
     val isUserChoosing: Boolean

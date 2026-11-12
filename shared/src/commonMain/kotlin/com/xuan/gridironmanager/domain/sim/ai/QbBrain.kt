@@ -1,6 +1,10 @@
 package com.xuan.gridironmanager.domain.sim.ai
 
+import com.xuan.gridironmanager.domain.sim.AttributeTranslator
 import com.xuan.gridironmanager.domain.sim.BallTrajectory
+import com.xuan.gridironmanager.domain.sim.match.PlayDebugTrace
+import com.xuan.gridironmanager.domain.sim.match.at
+import com.xuan.gridironmanager.domain.sim.match.fixed
 import com.xuan.gridironmanager.domain.sim.movement.MovementEngine
 import com.xuan.gridironmanager.domain.sim.movement.RunningPlayer
 import kotlin.math.max
@@ -31,8 +35,32 @@ class QbBrain(
     private val dropbackSec: Float = DEFAULT_DROPBACK_SEC,
     private val forceThrowSec: Float = DEFAULT_FORCE_THROW_SEC,
     var state: QbState = QbState.DROPPING_BACK,
+    /**
+     * Read time lost to a coverage disguise the QB failed to see through. The first read lands this much later and
+     * every read after it stays this far behind; [forceThrowSec] and the shrinking window do not move.
+     */
+    private val readDelaySec: Float = 0f,
+    /** When a fooled QB re-identifies the true coverage (seconds after the snap). Only affects [isFooled]. */
+    private val recoverAtSec: Float = 0f,
+    /** Diagnostic trace of this play's decisions, or null (the default) when debugging is off. Never read back. */
+    private val trace: PlayDebugTrace? = null,
 ) {
     private var elapsedSec = 0f
+
+    // Diagnostic bookkeeping only, so each event is traced once. Nothing here influences a decision.
+    private var readsBeganTraced = false
+    private var forceTimeTraced = false
+    private val pressureTraced = mutableSetOf<String>()
+    private val readsTraced = mutableSetOf<Int>()
+
+    private fun label(player: RunningPlayer) = player.slot ?: player.id
+
+    private inline fun log(text: () -> String) {
+        trace?.at(elapsedSec, text())
+    }
+
+    /** True while the QB is still reading the shell rather than the rotated coverage. */
+    val isFooled: Boolean get() = readDelaySec > 0f && elapsedSec < recoverAtSec
 
     /** The progression currently in the QB's visual read, if any. */
     var gazeTargetId: String? = null
@@ -45,9 +73,19 @@ class QbBrain(
         if (state == QbState.THROWING || state == QbState.SACKED) return null
         elapsedSec += tickDeltaSec
 
+        if (trace != null) {
+            for (defender in defenders) {
+                val distance = qb.currentPos.distance2DTo(defender.currentPos)
+                if (distance <= PRESSURE_RADIUS_YDS && pressureTraced.add(defender.id)) log { "pressure: ${label(defender)} at ${distance.fixed(1)} yd" }
+            }
+        }
+
         // Check Pressure
         if (defenders.any { qb.currentPos.distance2DTo(it.currentPos) <= SACK_RADIUS_YDS }) {
             state = QbState.SACKED
+            defenders.minByOrNull { qb.currentPos.distance2DTo(it.currentPos) }?.let { sacker ->
+                log { "SACKED by ${label(sacker)} (${qb.currentPos.distance2DTo(sacker.currentPos).fixed(1)} yd)" }
+            }
             return null
         }
 
@@ -57,27 +95,76 @@ class QbBrain(
             return null
         }
         state = QbState.READING_PROGRESSIONS
+        if (!readsBeganTraced) {
+            readsBeganTraced = true
+            log { "reads begin" }
+        }
+        if (elapsedSec >= forceThrowSec && !forceTimeTraced) {
+            forceTimeTraced = true
+            log { "force-throw time reached" }
+        }
 
-        val readsSoFar = 1 + ((elapsedSec - dropbackSec) / READ_TIME_SEC).toInt()
-        gazeTargetId = progressions.getOrNull((readsSoFar - 1).coerceAtMost(progressions.lastIndex))?.id
+        // A fooled QB's reads start late: until then they are still looking at the play's first read
+        val readsSoFar = if (elapsedSec < dropbackSec + readDelaySec) 0 else 1 + ((elapsedSec - dropbackSec - readDelaySec) / READ_TIME_SEC).toInt()
+        gazeTargetId = progressions.getOrNull((readsSoFar - 1).coerceIn(0, progressions.lastIndex.coerceAtLeast(0)))?.id
 
-        val reads = progressions.map { receiver -> planThrow(receiver).let { Read(receiver, it, separationAtCatch(it, defenders)) } }
+        // Receivers beyond the QB's arm are unreadable. They keep their place in the read order (so the cadence of reads
+        // doesn't shift) but are never the open read, and never the best-available read at force-throw.
+        // Honest note: generated QBs have 80-99 throwPower (55-60 yd range) and the longest route is 35 yards, so range
+        // almost never binds on generated rosters. Velocity is the real effect; range guards edited or custom rosters.
+        val maxRangeYds = AttributeTranslator.calculateMaxThrowDistanceYds(qb.attributes.throwPower)
+        val reads =
+            progressions.map { receiver ->
+                val trajectory = planThrow(receiver)
+                Read(receiver, trajectory, separationAtCatch(trajectory, defenders), inRange = qb.currentPos.distance2DTo(receiver.currentPos) <= maxRangeYds)
+            }
         val isPressured = defenders.any { qb.currentPos.distance2DTo(it.currentPos) <= PRESSURE_RADIUS_YDS }
         val isOutOfTime = elapsedSec >= forceThrowSec || isPressured
 
+        // Each read is traced once, the tick the QB gets to it: what the separation was and whether it met the window
+        if (trace != null) {
+            for (index in 0 until minOf(readsSoFar, reads.size)) {
+                if (!readsTraced.add(index)) continue
+                val candidate = reads[index]
+                val isOpen = candidate.inRange && candidate.separationYds >= requiredSeparation()
+                log { "read ${index + 1}: ${label(candidate.receiver)} sep ${candidate.separationYds.fixed(1)} yd → ${if (isOpen) "OPEN" else "NOT OPEN"}" }
+            }
+        }
+
         // One read at a time: the QB gets to the next receiver every READ_TIME_SEC, so the checkdown comes last
-        val openRead = reads.take(readsSoFar).firstOrNull { it.separationYds >= requiredSeparation() }
-        val read = openRead ?: (if (isOutOfTime) reads.maxByOrNull { it.separationYds } else null) ?: return null
+        val openRead = reads.take(readsSoFar).firstOrNull { it.inRange && it.separationYds >= requiredSeparation() }
+        val read = openRead ?: (if (isOutOfTime) reads.filter { it.inRange }.maxByOrNull { it.separationYds } else null) ?: return throwAwayIfOutOfTime(isOutOfTime, reads)
 
         state = QbState.THROWING
         val command = ThrowCommand(read.receiver.id, read.trajectory)
-        return if (isOutOfTime && read.separationYds < MIN_THROWABLE_SEPARATION_YDS) command.copy(isThrowAway = true) else command
+        if (isOutOfTime && read.separationYds < MIN_THROWABLE_SEPARATION_YDS) {
+            log { "throwaway (${if (isPressured) "forced by pressure" else "force-throw time"})" }
+            return command.copy(isThrowAway = true)
+        }
+        log {
+            val speed = AttributeTranslator.calculatePassSpeedYdsPerSec(qb.attributes.throwPower)
+            "throw → ${label(read.receiver)} sep ${read.separationYds.fixed(1)} yd, speed ${speed.fixed(1)} yd/s"
+        }
+        return command
+    }
+
+    /** Out of time with nobody in range: throw it away at the first read, as a QB with nobody open does. */
+    private fun throwAwayIfOutOfTime(
+        isOutOfTime: Boolean,
+        reads: List<Read>,
+    ): ThrowCommand? {
+        val first = reads.firstOrNull() ?: return null
+        if (!isOutOfTime) return null
+        state = QbState.THROWING
+        log { "throwaway (no receiver in range)" }
+        return ThrowCommand(first.receiver.id, first.trajectory, isThrowAway = true)
     }
 
     private data class Read(
         val receiver: RunningPlayer,
         val trajectory: BallTrajectory,
         val separationYds: Float,
+        val inRange: Boolean = true,
     )
 
     /** The window the QB needs: wide open early in the down, narrowing to a tight window by [forceThrowSec]. */
@@ -102,7 +189,8 @@ class QbBrain(
 
     /** Leads [receiver] to where they will be on their route when the ball arrives. */
     fun planThrow(receiver: RunningPlayer): BallTrajectory {
-        val flightTimeSec = (qb.currentPos.distance2DTo(receiver.currentPos) / PASS_SPEED_YDS_PER_SEC).coerceAtLeast(MIN_FLIGHT_SEC)
+        val passSpeedYdsPerSec = AttributeTranslator.calculatePassSpeedYdsPerSec(qb.attributes.throwPower)
+        val flightTimeSec = (qb.currentPos.distance2DTo(receiver.currentPos) / passSpeedYdsPerSec).coerceAtLeast(MIN_FLIGHT_SEC)
         val leadPos = MovementEngine.predictPosition(receiver, flightTimeSec)
 
         return BallTrajectory(
@@ -116,14 +204,13 @@ class QbBrain(
     companion object {
         const val DEFAULT_DROPBACK_SEC = 0.6f
         const val DEFAULT_FORCE_THROW_SEC = 2.6f
-        private const val SACK_RADIUS_YDS = 1.5f
-        private const val PRESSURE_RADIUS_YDS = 3f
+        const val SACK_RADIUS_YDS = 1.5f
+        const val PRESSURE_RADIUS_YDS = 3f
         private const val READ_TIME_SEC = 0.4f
         private const val OPEN_EARLY_SEPARATION_YDS = 3f
         private const val OPEN_LATE_SEPARATION_YDS = 1.5f
         private const val MIN_THROWABLE_SEPARATION_YDS = 0.3f
         private const val DEFENDER_REACTION_SEC = 0.3f
-        private const val PASS_SPEED_YDS_PER_SEC = 20f
         private const val MIN_FLIGHT_SEC = 0.1f
         private const val RELEASE_HEIGHT_YDS = 2.0f
         private const val CATCH_HEIGHT_YDS = 1.2f

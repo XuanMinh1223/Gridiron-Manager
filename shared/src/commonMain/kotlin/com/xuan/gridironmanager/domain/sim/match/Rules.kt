@@ -5,6 +5,11 @@ object Rules {
     const val END_ZONE_DEPTH_YDS = 10
     const val QUARTER_LENGTH_SEC = 900
     const val QUARTERS = 4
+
+    /** Sudden-death overtime (v1): the first score wins, rather than the NFL's both-teams-possess rule. */
+    const val OVERTIME_LENGTH_SEC = 600
+    const val TIMEOUTS_PER_HALF = 3
+    const val OVERTIME_TIMEOUTS = 2
     const val FIRST_DOWN_DISTANCE = 10
 
     const val TOUCHDOWN_POINTS = 6
@@ -15,8 +20,11 @@ object Rules {
 
     const val KICKOFF_YARD_LINE = 35
     const val SAFETY_KICK_YARD_LINE = 20
-    const val KICKOFF_TOUCHBACK_YARD_LINE = 25
+    const val KICKOFF_TOUCHBACK_YARD_LINE = 35
+    const val LANDING_ZONE_TOUCHBACK_YARD_LINE = 20
+    const val KICKOFF_LANDING_ZONE_FRONT_YARD_LINE = 20
     const val KICKOFF_OUT_OF_BOUNDS_YARD_LINE = 40
+    const val SAFETY_KICK_OUT_OF_BOUNDS_YARD_LINE = 50
     const val PUNT_TOUCHBACK_YARD_LINE = 20
     const val INTERCEPTION_TOUCHBACK_YARD_LINE = 20
 

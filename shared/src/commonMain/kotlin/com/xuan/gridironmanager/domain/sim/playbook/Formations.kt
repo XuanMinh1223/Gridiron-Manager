@@ -102,18 +102,18 @@ object Formations {
             type = FormationType.KICKOFF,
             nodes =
                 (0..10).map { i ->
-                    if (i == 5) node("K", Position.K, 0, 0) else node("KC$i", Position.S, (i - 5) * 5, 0)
+                    if (i == 5) node("K", Position.K, 0, 0) else node("KC$i", Position.S, (i - 5) * 5, -25)
                 },
         )
 
-    /** Lined up from the receiving team's goal line: the returner deep, blockers ahead. */
+    /** Setup unit on its own 35, five yards behind coverage; the returner waits near the goal line. */
     val KICK_RETURN =
         Formation(
             name = "Kick Return",
             type = FormationType.KICK_RETURN,
             nodes =
                 (0..10).map { i ->
-                    if (i == 5) node("KR", Position.RB, 0, 2) else node("KRB$i", Position.LB, (i - 5) * 8, 30)
+                    if (i == 5) node("KR", Position.RB, 0, 2) else node("KRB$i", Position.LB, (i - 5) * 8, 33)
                 },
         )
 

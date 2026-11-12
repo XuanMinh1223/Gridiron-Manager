@@ -17,7 +17,9 @@ import kotlinx.coroutines.launch
 import kotlin.random.Random
 
 class GameSimViewModel(
-    private val random: Random = Random.Default,
+    /** Seeds the game's randomness, and is shown in the debug log so a playtest report can name its game. */
+    private val seed: Long = Random.nextLong(),
+    private val random: Random = Random(seed),
     private val loadTeamsJson: suspend () -> String = { Res.readBytes("files/teams.json").decodeToString() },
 ) : ViewModel() {
     private val _matchup = MutableStateFlow<Matchup?>(null)
@@ -25,7 +27,7 @@ class GameSimViewModel(
 
     val playerRepository = PlayerRepository()
 
-    private val matchPresenter = MatchPresenter(viewModelScope, random = random)
+    private val matchPresenter = MatchPresenter(viewModelScope, random = random, seed = seed)
 
     /** Single source of truth for the live match. */
     val matchUiState: StateFlow<MatchUiState> = matchPresenter.uiState
