@@ -219,8 +219,10 @@ class PlayDebugTraceTest {
         assertEquals("R1", command!!.targetId)
         assertTrue(lines[0].endsWith("reads begin"), lines.toString())
         assertTrue(lines[1].contains("read 1: R1") && lines[1].endsWith("→ OPEN"), lines.toString())
-        assertTrue(lines[2].contains("throw → R1") && lines[2].contains("speed 20.0 yd/s"), lines.toString())
-        assertEquals(3, lines.size)
+        // Phase 1 (§3): the decision starts a windup, and the throw line fires when the windup completes
+        assertTrue(lines[2].contains("windup 0.15 s → R1"), lines.toString())
+        assertTrue(lines[3].contains("throw → R1") && lines[3].contains("speed 20.0 yd/s"), lines.toString())
+        assertEquals(4, lines.size)
     }
 
     @Test

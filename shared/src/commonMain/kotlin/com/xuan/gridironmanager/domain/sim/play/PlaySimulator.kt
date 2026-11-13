@@ -116,6 +116,8 @@ class PlaySimulator(
     private var carrierVelocity = Vector3D(0f, 0f, 0f)
     private var scrambleDecided = false
     private var isScramble = false
+    /** True while the QB is mid-windup (§3): a sack then strips the ball at the windup rate. */
+    private var windupInProgress = false
     private val defenderTracking = mutableMapOf<String, DefenderTrackingState>()
 
     // Elusiveness: tacklers who missed and are still recovering, and the moves that beat them
@@ -762,20 +764,23 @@ class PlaySimulator(
 
         if (ballTrajectory == null) {
             ballPosition = qb.currentPos
-            if (maybeScramble(qb)) return tickBallCarrier(qb, isCatch = false)
+            // The windup commits the QB: no scramble while it runs (§3).
+            if (brain.state != QbState.WINDUP && maybeScramble(qb)) return tickBallCarrier(qb, isCatch = false)
             brain.evaluateTick(defense.filterNot(::isBlocked), tickDeltaSec)?.let { throwCommand ->
+                windupInProgress = false
                 if (throwCommand.isThrowAway) return incomplete("Nobody open, the pass is thrown away.")
                 ballTrajectory = withThrowError(throwCommand.trajectory, qb.attributes.throwAccuracy)
                 throwTimeSec = elapsedSec
                 targetReceiver = playersById[throwCommand.targetId]
                 initializeDefenderTracking(qb, targetReceiver)
             }
+            if (brain.state == QbState.WINDUP) windupInProgress = true
 
             if (brain.state == QbState.SACKED) {
                 val yardsLost = (-yardsFromLos(qb.currentPos.y)).coerceAtLeast(0)
                 val sacker = defense.minByOrNull { it.currentPos.distance2DTo(qb.currentPos) } ?: return whistleDead()
                 val actors = PlayActors(passerId = qb.id, carrierId = qb.id, tacklerId = sacker.id)
-                return fumbleOrNull(qb, sacker, -yardsLost, STRIP_SACK_CHANCE, actors, isSack = true)
+                return fumbleOrNull(qb, sacker, -yardsLost, if (windupInProgress) STRIP_SACK_CHANCE_WINDUP else STRIP_SACK_CHANCE, actors, isSack = true)
                     ?: PlayOutcome.Scrimmage(
                         PlayResult(
                             -yardsLost,
@@ -1218,6 +1223,8 @@ class PlaySimulator(
         private const val BALL_BREAK_RADIUS_YDS = 15f
         private const val FUMBLE_CHANCE = 0.012f
         private const val STRIP_SACK_CHANCE = 0.1f
+        /** Base strip chance when the QB is sacked mid-windup, arm back and ball exposed (§3). */
+        internal const val STRIP_SACK_CHANCE_WINDUP = 0.25f
         private const val FIELD_GOAL_HOLD_SEC = 1.3f
         private const val FIELD_GOAL_APPROACH_SPEED_YDS_PER_SEC = 5f
         private const val FIELD_GOAL_APEX_YDS = 10f

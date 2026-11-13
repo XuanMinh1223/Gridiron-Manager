@@ -71,14 +71,20 @@ class QbThrowPowerTest {
         val far = player("FAR", 75f)
         val brain = QbBrain(qb(50), listOf(far))
         var command: ThrowCommand? = null
+        var decisionSec: Float? = null
+        var arrivalSec: Float? = null
         var elapsed = 0f
 
-        while (command == null && elapsed < 3f) {
+        while (arrivalSec == null && elapsed < 3f) {
             elapsed += tick
             command = brain.evaluateTick(emptyList(), tick)
+            if (decisionSec == null && brain.state == QbState.WINDUP) decisionSec = elapsed
+            if (command != null) arrivalSec = elapsed
         }
 
         assertTrue(assertNotNull(command).isThrowAway)
-        assertEquals(QbBrain.DEFAULT_FORCE_THROW_SEC, elapsed, tick + 0.001f)
+        // Phase 1 (§3): the throwaway is decided at force-throw time and released after its windup
+        assertEquals(QbBrain.DEFAULT_FORCE_THROW_SEC, assertNotNull(decisionSec), tick + 0.001f)
+        assertEquals(QbBrain.DEFAULT_FORCE_THROW_SEC + QbBrain.THROWAWAY_WINDUP_SEC, assertNotNull(arrivalSec), tick + 0.001f)
     }
 }

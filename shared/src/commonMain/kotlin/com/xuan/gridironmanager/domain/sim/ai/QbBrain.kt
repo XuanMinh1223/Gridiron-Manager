@@ -12,6 +12,7 @@ import kotlin.math.max
 enum class QbState {
     DROPPING_BACK,
     READING_PROGRESSIONS,
+    WINDUP,
     THROWING,
     SACKED,
 }
@@ -46,6 +47,11 @@ class QbBrain(
     private val trace: PlayDebugTrace? = null,
 ) {
     private var elapsedSec = 0f
+
+    // The pending throw during a windup: the decision is made, the ball has not left yet.
+    private var pendingThrow: ThrowCommand? = null
+    private var windupRemainingSec = 0f
+    private var pendingThrowLog: String? = null
 
     // Diagnostic bookkeeping only, so each event is traced once. Nothing here influences a decision.
     private var readsBeganTraced = false
@@ -83,8 +89,25 @@ class QbBrain(
         // Check Pressure
         if (defenders.any { qb.currentPos.distance2DTo(it.currentPos) <= SACK_RADIUS_YDS }) {
             state = QbState.SACKED
+            pendingThrow = null
+            pendingThrowLog = null
             defenders.minByOrNull { qb.currentPos.distance2DTo(it.currentPos) }?.let { sacker ->
                 log { "SACKED by ${label(sacker)} (${qb.currentPos.distance2DTo(sacker.currentPos).fixed(1)} yd)" }
+            }
+            return null
+        }
+
+        // Committed to the throw: the timer runs out and the stored command is released. A sack above
+        // already ended the play, so nothing here can change the read or switch to a throwaway.
+        if (state == QbState.WINDUP) {
+            windupRemainingSec -= tickDeltaSec
+            if (windupRemainingSec <= WINDUP_DONE_EPSILON_SEC) {
+                val command = pendingThrow
+                pendingThrow = null
+                state = QbState.THROWING
+                pendingThrowLog?.let { text -> log { text } }
+                pendingThrowLog = null
+                return command
             }
             return null
         }
@@ -135,17 +158,41 @@ class QbBrain(
         val openRead = reads.take(readsSoFar).firstOrNull { it.inRange && it.separationYds >= requiredSeparation() }
         val read = openRead ?: (if (isOutOfTime) reads.filter { it.inRange }.maxByOrNull { it.separationYds } else null) ?: return throwAwayIfOutOfTime(isOutOfTime, reads)
 
-        state = QbState.THROWING
         val command = ThrowCommand(read.receiver.id, read.trajectory)
         if (isOutOfTime && read.separationYds < MIN_THROWABLE_SEPARATION_YDS) {
-            log { "throwaway (${if (isPressured) "forced by pressure" else "force-throw time"})" }
-            return command.copy(isThrowAway = true)
+            beginWindup(
+                command.copy(isThrowAway = true),
+                THROWAWAY_WINDUP_SEC,
+                "throwaway (${if (isPressured) "forced by pressure" else "force-throw time"})",
+                read.receiver,
+            )
+            return null
         }
-        log {
-            val speed = AttributeTranslator.calculatePassSpeedYdsPerSec(qb.attributes.throwPower)
-            "throw → ${label(read.receiver)} sep ${read.separationYds.fixed(1)} yd, speed ${speed.fixed(1)} yd/s"
-        }
-        return command
+        val speed = AttributeTranslator.calculatePassSpeedYdsPerSec(qb.attributes.throwPower)
+        beginWindup(
+            command,
+            WINDUP_SEC,
+            "throw → ${label(read.receiver)} sep ${read.separationYds.fixed(1)} yd, speed ${speed.fixed(1)} yd/s",
+            read.receiver,
+        )
+        return null
+    }
+
+    /**
+     * A throw decision starts the windup: the QB is committed, the ball leaves when the timer runs out, and the
+     * `throw →` / `throwaway (...)` line fires when the command is returned, not at the decision.
+     */
+    private fun beginWindup(
+        command: ThrowCommand,
+        durationSec: Float,
+        logText: String,
+        receiver: RunningPlayer,
+    ) {
+        pendingThrow = command
+        windupRemainingSec = durationSec
+        pendingThrowLog = logText
+        state = QbState.WINDUP
+        log { "windup ${durationSec.fixed(2)} s → ${label(receiver)}" }
     }
 
     /** Out of time with nobody in range: throw it away at the first read, as a QB with nobody open does. */
@@ -155,9 +202,13 @@ class QbBrain(
     ): ThrowCommand? {
         val first = reads.firstOrNull() ?: return null
         if (!isOutOfTime) return null
-        state = QbState.THROWING
-        log { "throwaway (no receiver in range)" }
-        return ThrowCommand(first.receiver.id, first.trajectory, isThrowAway = true)
+        beginWindup(
+            ThrowCommand(first.receiver.id, first.trajectory, isThrowAway = true),
+            THROWAWAY_WINDUP_SEC,
+            "throwaway (no receiver in range)",
+            first.receiver,
+        )
+        return null
     }
 
     private data class Read(
@@ -206,6 +257,11 @@ class QbBrain(
         const val DEFAULT_FORCE_THROW_SEC = 2.6f
         const val SACK_RADIUS_YDS = 1.5f
         const val PRESSURE_RADIUS_YDS = 3f
+        /** Time between the throw decision and the release for a normal throw (§3). */
+        const val WINDUP_SEC = 0.15f
+        /** Time between the throw decision and the release for a throwaway (§3). */
+        const val THROWAWAY_WINDUP_SEC = 0.10f
+        private const val WINDUP_DONE_EPSILON_SEC = 0.001f
         private const val READ_TIME_SEC = 0.4f
         private const val OPEN_EARLY_SEPARATION_YDS = 3f
         private const val OPEN_LATE_SEPARATION_YDS = 1.5f

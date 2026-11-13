@@ -115,16 +115,20 @@ class QbReadTest {
 
     @Test
     fun testFooledQbIsStillForcedToThrowAtTheSameTime() {
-        // Nobody is open, so both QBs are forced to throw at 2.6s from the snap - the delay does not move it
+        // Nobody is open, so both QBs decide to throw at 2.6s from the snap - the delay does not move it.
+        // Phase 1 (§3): the decision is at 2.6s; the throwaway is released after its windup.
         for (delay in listOf(0f, 0.4f)) {
             val brain = brain(readDelaySec = delay)
             var t = 0f
+            var decided: Float? = null
             var thrown: Float? = null
             while (t < 3f && thrown == null) {
                 t += tick
                 if (brain.evaluateTick(coverage, tick) != null) thrown = t
+                if (decided == null && brain.state == QbState.WINDUP) decided = t
             }
-            assertEquals(2.6f, assertNotNull(thrown), tick + 0.001f, "delay=$delay")
+            assertEquals(2.6f, assertNotNull(decided), tick + 0.001f, "delay=$delay")
+            assertEquals(2.6f + QbBrain.THROWAWAY_WINDUP_SEC, assertNotNull(thrown), tick + 0.001f, "delay=$delay")
         }
     }
 
